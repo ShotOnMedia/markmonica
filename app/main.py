@@ -1,16 +1,64 @@
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from contextlib import asynccontextmanager
+from pathlib import Path
 
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from redis import Redis
+from sqlalchemy import text
+
+from app import __version__
+from app.db import engine
+from app.services.storage import bucket_is_ready, ensure_bucket
 from app.settings import settings
 
-app = FastAPI(title=settings.app_name, version="0.1.0")
+BASE_DIR = Path(__file__).resolve().parent.parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    if settings.s3_auto_create_bucket:
+        ensure_bucket()
+    yield
+
+
+app = FastAPI(title=settings.app_name, version=__version__, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "app": settings.app_name, "version": "0.1.0"}
+    return {"status": "ok", "app": settings.app_name, "version": __version__}
+
+
+@app.get("/health/ready")
+def readiness() -> dict[str, object]:
+    checks = {"database": False, "redis": False, "storage": False}
+
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        checks["database"] = True
+    except Exception:
+        pass
+
+    try:
+        client = Redis.from_url(settings.redis_url, socket_connect_timeout=2, socket_timeout=2)
+        checks["redis"] = bool(client.ping())
+    except Exception:
+        pass
+
+    checks["storage"] = bucket_is_ready()
+    ready = all(checks.values())
+    return {"status": "ready" if ready else "degraded", "checks": checks}
 
 
 @app.get("/", response_class=HTMLResponse)
-def home() -> str:
-    return """<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><title>MarkMonica</title><style>body{font-family:system-ui,sans-serif;margin:0;background:#f7f5f2;color:#222;display:grid;min-height:100vh;place-items:center}.card{max-width:680px;margin:24px;padding:48px;border-radius:24px;background:#fff;box-shadow:0 18px 60px #00000012;text-align:center}h1{font-size:clamp(2.5rem,8vw,5rem);margin:.1em 0}p{font-size:1.15rem;line-height:1.6;color:#666}</style></head><body><main class='card'><h1>MarkMonica</h1><p>One QR code. Every guest's memories, together.</p><p>v0.1.0 foundation is running.</p></main></body></html>"""
+def home(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={"app_name": settings.app_name, "version": __version__},
+    )

@@ -1,0 +1,7 @@
+services:
+  app:
+    build: null
+    image: ghcr.io/shotonmedia/markmonica:${MARKMONICA_VERSION:-latest}
+  worker:
+    build: null
+    image: ghcr.io/shotonmedia/markmonica:${MARKMONICA_VERSION:-latest}

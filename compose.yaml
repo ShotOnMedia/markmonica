@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: .
-    image: markmonica:0.1.0
+    image: ${MARKMONICA_IMAGE:-markmonica:0.1.0}
     restart: unless-stopped
     env_file:
       - .env
@@ -10,6 +10,22 @@ services:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+    image: ${MARKMONICA_IMAGE:-markmonica:0.1.0}
+    restart: unless-stopped
+    command: ["python", "-m", "worker.main"]
+    environment:
+      RUN_MIGRATIONS: "0"
+    env_file:
+      - .env
+    depends_on:
+      app:
         condition: service_healthy
       redis:
         condition: service_healthy
