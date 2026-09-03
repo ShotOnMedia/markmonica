@@ -20,6 +20,8 @@ services:
     image: ${MARKMONICA_IMAGE:-markmonica:0.1.0}
     restart: unless-stopped
     command: ["python", "-m", "worker.main"]
+    healthcheck:
+      disable: true
     environment:
       RUN_MIGRATIONS: "0"
     env_file:
