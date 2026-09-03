@@ -8,3 +8,4 @@ sqlalchemy>=2.0,<3.0
 alembic>=1.16,<2.0
 redis>=6.0,<7.0
 boto3>=1.40,<2.0
+qrcode[pil]>=8.2,<9.0
