@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "MarkMonica"
     environment: str = "development"
+    app_url: str = "http://localhost:8000"
     database_url: str = "postgresql+psycopg://markmonica:markmonica@db:5432/markmonica"
     redis_url: str = "redis://redis:6379/0"
     s3_endpoint_url: str | None = "http://minio:9000"
