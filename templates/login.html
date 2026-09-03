@@ -1,0 +1,3 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in · MarkMonica</title><link rel="stylesheet" href="/static/app.css"></head>
+<body><main class="card auth-card"><a class="brand" href="/">MarkMonica</a><h1>Welcome back</h1><p>Sign in to manage your events and guest galleries.</p>{% if error %}<p class="error">{{ error }}</p>{% endif %}<form method="post"><label>Email<input type="email" name="email" autocomplete="email" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Sign in</button></form><p class="muted">New to MarkMonica? <a href="/register">Create an account</a></p></main></body></html>
