@@ -17,6 +17,17 @@
     }
   });
 
+  function contentTypeFor(file) {
+    if (file.type) return file.type;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const types = {
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+      gif: 'image/gif', heic: 'image/heic', heif: 'image/heif',
+      mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm'
+    };
+    return types[ext] || 'application/octet-stream';
+  }
+
   function rowFor(file) {
     const row = document.createElement('div');
     row.className = 'upload-row';
@@ -43,13 +54,14 @@
     bar.style.width = '0%';
 
     try {
+      const contentType = contentTypeFor(file);
       state.textContent = 'Preparing…';
       const init = await fetch(`/api/events/${encodeURIComponent(slug)}/uploads`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
           filename: file.name,
-          content_type: file.type || 'application/octet-stream',
+          content_type: contentType,
           size_bytes: file.size,
           guest_name: guestName.value.trim() || null,
         }),
