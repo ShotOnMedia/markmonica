@@ -2,12 +2,15 @@ services:
   app:
     build:
       context: .
-    image: ${MARKMONICA_IMAGE:-markmonica:0.1.0}
+    image: ${MARKMONICA_IMAGE:-markmonica:0.2.0}
     restart: unless-stopped
     env_file:
       - .env
-    ports:
-      - "8000:8000"
+    networks:
+      default:
+      proxy:
+        aliases:
+          - markmonica-app
     depends_on:
       db:
         condition: service_healthy
@@ -17,7 +20,7 @@ services:
   worker:
     build:
       context: .
-    image: ${MARKMONICA_IMAGE:-markmonica:0.1.0}
+    image: ${MARKMONICA_IMAGE:-markmonica:0.2.0}
     restart: unless-stopped
     command: ["python", "-m", "worker.main"]
     healthcheck:
@@ -68,6 +71,11 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-now}
     ports:
       - "127.0.0.1:9001:9001"
+    networks:
+      default:
+      proxy:
+        aliases:
+          - markmonica-minio
     volumes:
       - minio_data:/data
 
@@ -75,3 +83,7 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+
+networks:
+  proxy:
+    external: true
