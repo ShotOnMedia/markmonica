@@ -34,13 +34,13 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: markmonica
-      POSTGRES_USER: markmonica
-      POSTGRES_PASSWORD: markmonica
+      POSTGRES_DB: ${POSTGRES_DB:-markmonica}
+      POSTGRES_USER: ${POSTGRES_USER:-markmonica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-markmonica}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U markmonica -d markmonica"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-markmonica} -d ${POSTGRES_DB:-markmonica}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -65,8 +65,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-markmonica}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-now}
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
 
