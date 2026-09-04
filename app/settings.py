@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     upload_url_expiry_seconds: int = 900
     max_image_upload_mb: int = 50
     max_video_upload_mb: int = 500
+    stale_upload_hours: int = 2
+    stale_upload_cleanup_interval_seconds: int = 900
     worker_queue: str = "markmonica:jobs"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
