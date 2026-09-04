@@ -67,7 +67,15 @@ def ensure_bucket(max_attempts: int = 20, delay_seconds: float = 1.5) -> None:
             raise
 
 
-def _ensure_cors(client) -> None:
+def _ensure_cors(client) -> bool:
+    """Best-effort bucket CORS configuration.
+
+    Some S3-compatible development backends, including certain MinIO
+    configurations, do not implement PutBucketCors. CORS is required for
+    browser-direct uploads but must not prevent the API from starting.
+    Production storage can support this API, while MinIO CORS can be
+    configured independently at the server/proxy layer.
+    """
     origin = settings.app_url.rstrip("/")
     try:
         client.put_bucket_cors(
@@ -84,9 +92,17 @@ def _ensure_cors(client) -> None:
                 ]
             },
         )
-    except ClientError:
-        logger.exception("Unable to configure CORS for bucket '%s'", settings.s3_bucket)
-        raise
+        logger.info("Configured CORS for object storage bucket '%s'", settings.s3_bucket)
+        return True
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        logger.warning(
+            "Unable to configure CORS for bucket '%s' via S3 API (%s); "
+            "continuing because bucket CORS can be configured separately",
+            settings.s3_bucket,
+            code or exc.__class__.__name__,
+        )
+        return False
 
 
 def create_presigned_upload(object_key: str, content_type: str) -> str:
