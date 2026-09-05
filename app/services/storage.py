@@ -1,5 +1,6 @@
 import logging
 import time
+from pathlib import Path
 
 import boto3
 from botocore.config import Config
@@ -68,14 +69,7 @@ def ensure_bucket(max_attempts: int = 20, delay_seconds: float = 1.5) -> None:
 
 
 def _ensure_cors(client) -> bool:
-    """Best-effort bucket CORS configuration.
-
-    Some S3-compatible development backends, including certain MinIO
-    configurations, do not implement PutBucketCors. CORS is required for
-    browser-direct uploads but must not prevent the API from starting.
-    Production storage can support this API, while MinIO CORS can be
-    configured independently at the server/proxy layer.
-    """
+    """Best-effort bucket CORS configuration."""
     origin = settings.app_url.rstrip("/")
     try:
         client.put_bucket_cors(
@@ -97,8 +91,7 @@ def _ensure_cors(client) -> bool:
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code", ""))
         logger.warning(
-            "Unable to configure CORS for bucket '%s' via S3 API (%s); "
-            "continuing because bucket CORS can be configured separately",
+            "Unable to configure CORS for bucket '%s' via S3 API (%s); continuing because bucket CORS can be configured separately",
             settings.s3_bucket,
             code or exc.__class__.__name__,
         )
@@ -123,3 +116,16 @@ def create_presigned_download(object_key: str, expires_in: int = 900) -> str:
 
 def head_object(object_key: str):
     return get_s3_client().head_object(Bucket=settings.s3_bucket, Key=object_key)
+
+
+def download_object(object_key: str, destination: str | Path) -> None:
+    get_s3_client().download_file(settings.s3_bucket, object_key, str(destination))
+
+
+def upload_object(source: str | Path, object_key: str, content_type: str) -> None:
+    get_s3_client().upload_file(
+        str(source),
+        settings.s3_bucket,
+        object_key,
+        ExtraArgs={"ContentType": content_type},
+    )
