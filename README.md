@@ -1,93 +1,105 @@
 # MarkMonica
 
-MarkMonica is a mobile-first event photo and video sharing platform. Hosts create an event and share a QR code; guests scan it and upload their memories without installing an app.
+MarkMonica is a mobile-first event photo and video sharing platform. Hosts create an event and share a QR code; guests scan it and upload their memories without installing an app or creating an account.
 
-## v0.1.0 Foundation
+## v0.2.0
 
-The foundation is Docker-first and contains:
+The current stack includes:
 
-- FastAPI web application
-- PostgreSQL 17 + SQLAlchemy
-- Alembic database migrations
-- Redis queue/cache
-- background worker container
-- S3-compatible object storage (MinIO locally; Cloudflare R2 in production)
-- automatic local bucket bootstrap
-- Docker health check and dependency readiness endpoint
-- GitHub Actions tests and Docker image build/publish pipeline
+- FastAPI host and guest web application
+- PostgreSQL 17 + SQLAlchemy + Alembic
+- Redis-backed worker and guest upload rate limiting
+- Host registration/login with DB-backed sessions
+- Event creation, Draft/Live state and immutable guest slugs
+- QR-code guest access
+- Browser-direct photo/video uploads using short-lived S3 presigned URLs
+- Upload confirmation using object HEAD verification
+- Private host gallery with image previews and inline video playback
+- stale upload recovery/cleanup in the worker
+- security headers, same-origin protection for host mutations and hardened cookies
+- dependency readiness that returns HTTP 503 when degraded
 
-The initial schema already reserves the core `users`, `events`, and `media` entities so the next milestones can build on migrations rather than recreating the persistence layer.
+## Object storage
 
-## Local / server build
+MarkMonica expects an external S3-compatible object store. Media bytes do not pass through FastAPI: the browser uploads directly to the object-storage endpoint using a short-lived presigned PUT URL.
+
+The object store must:
+
+- be reachable over HTTPS from guest browsers;
+- allow CORS from `APP_URL` for `PUT`, `GET` and `HEAD` as required by the provider;
+- use credentials scoped to the configured bucket and required object operations;
+- keep the bucket private.
+
+For MinIO deployments that do not implement bucket-level `PutBucketCors`, configure CORS at the MinIO server level. Cloudflare R2 can be used by replacing the S3 endpoint/credential values in `.env`.
+
+## Deployment
 
 ```bash
 git clone https://github.com/ShotOnMedia/markmonica.git
 cd markmonica
-git checkout feature/v0.1.0-foundation
 cp .env.example .env
-# Change passwords/secrets in .env before exposing the services.
+# Replace all placeholder passwords, URLs and object-storage credentials.
 docker compose up -d --build
 ```
 
-Application: `http://localhost:8000`
+The application container is intended to sit behind a reverse proxy on the external Docker `proxy` network. PostgreSQL and Redis remain internal to the Compose stack.
 
 Liveness:
 
 ```bash
-curl http://localhost:8000/health
+curl https://events.example.com/health
 ```
 
 Dependency readiness:
 
 ```bash
-curl http://localhost:8000/health/ready
+curl https://events.example.com/health/ready
 ```
 
-A healthy full stack reports database, Redis and storage as `true`.
+A ready stack returns HTTP 200. If PostgreSQL, Redis or object storage is unavailable, readiness returns HTTP 503 with per-dependency checks.
 
-MinIO's local administration console is exposed on port `9001`.
+Alembic migrations run automatically when the application container starts. The worker uses the same image with migrations disabled.
 
-## Updating an existing v0.1.0 checkout
+## Guest uploads
+
+Default limits are:
+
+- images: 50 MB;
+- videos: 500 MB;
+- upload session URL: 15 minutes;
+- upload-init rate limit: 30 attempts per IP/event/minute;
+- stale `uploading` recovery/cleanup: after 2 hours, checked every 15 minutes.
+
+Supported image MIME types are JPEG, PNG, WebP, GIF, HEIC and HEIF. Supported video MIME types are MP4, QuickTime/MOV, M4V and WebM.
+
+If an interrupted upload has actually reached object storage, stale cleanup validates its object size/type and promotes it to `uploaded`. If no object exists, the abandoned database row is removed.
+
+## Production image
+
+GitHub Actions validates changes and builds the application image. Production can use the supplied image override:
 
 ```bash
-git pull
-docker compose up -d --build
-docker compose ps
-curl http://localhost:8000/health/ready
-```
-
-Alembic migrations run automatically when the application container starts. The worker uses the same image but does not run migrations.
-
-## Production Docker image
-
-GitHub Actions validates feature branches. After changes land on `main`, the workflow publishes the application image to GitHub Container Registry as:
-
-```text
-ghcr.io/shotonmedia/markmonica:latest
-```
-
-Version tags such as `v0.1.0` publish corresponding semantic-version image tags. Production deployment can use the supplied override:
-
-```bash
-export MARKMONICA_VERSION=0.1.0
+export MARKMONICA_VERSION=0.2.0
 docker compose -f compose.yaml -f compose.prod.yaml pull
 docker compose -f compose.yaml -f compose.prod.yaml up -d
 ```
 
-For Cloudflare R2, replace the S3 values in `.env`, normally disable `S3_AUTO_CREATE_BUCKET`, and provide an existing bucket with credentials limited to the required object operations.
+## Security notes
 
-## Architecture direction
+- host media URLs require an authenticated event owner and redirect to short-lived signed object URLs;
+- host state-changing forms enforce same-origin requests;
+- session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` when `APP_URL` is HTTPS;
+- response security headers include CSP, `nosniff`, clickjacking protection and a restrictive permissions policy;
+- guest upload initiation is rate-limited with Redis;
+- object-storage credentials should never be exposed to browsers or committed to the repository.
 
-Guest media will upload directly from the browser to S3-compatible object storage using short-lived presigned URLs. This keeps large photo/video transfers away from the FastAPI container. The worker will handle asynchronous jobs such as thumbnails, metadata extraction, archive generation and later video processing.
+Rotate any credentials that have been exposed during development or troubleshooting before production use.
 
-## Planned milestones
+## Roadmap
 
-- **v0.1.0** Foundation and Docker deployment
-- **v0.1.1** Host accounts and event management
-- **v0.1.2** Public guest experience and QR codes
-- **v0.1.3** Reliable direct photo/video uploads
-- **v0.1.4** Event galleries
-- **v0.1.5** Host moderation and downloads
+- **v0.1.0** Docker/application foundation
+- **v0.2.0** Host accounts, events, QR guest access, direct uploads and private host gallery
+- **v0.3.0** Moderation, richer gallery workflows, bulk download and product-level polish
 
 ## License
 
