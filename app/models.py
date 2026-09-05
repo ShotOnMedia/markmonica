@@ -67,6 +67,12 @@ class Media(Base):
     uploader_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
+    processing_status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
+    preview_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    poster_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    processed_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    processed_content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     event: Mapped[Event] = relationship(back_populates="media")
