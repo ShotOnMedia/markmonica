@@ -62,27 +62,9 @@ services:
       timeout: 5s
       retries: 5
 
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-markmonica}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-now}
-    ports:
-      - "127.0.0.1:9001:9001"
-    networks:
-      default:
-      proxy:
-        aliases:
-          - markmonica-minio
-    volumes:
-      - minio_data:/data
-
 volumes:
   postgres_data:
   redis_data:
-  minio_data:
 
 networks:
   proxy:
