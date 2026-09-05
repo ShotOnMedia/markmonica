@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     app_url: str = "http://localhost:8000"
     database_url: str = "postgresql+psycopg://markmonica:markmonica@db:5432/markmonica"
     redis_url: str = "redis://redis:6379/0"
-    s3_endpoint_url: str | None = "http://minio:9000"
+    s3_endpoint_url: str | None = None
     s3_public_endpoint_url: str | None = None
     s3_access_key: str = "markmonica"
     s3_secret_key: str = "change-me"
@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     upload_url_expiry_seconds: int = 900
     max_image_upload_mb: int = 50
     max_video_upload_mb: int = 500
+    guest_upload_rate_limit_per_minute: int = 30
     stale_upload_hours: int = 2
     stale_upload_cleanup_interval_seconds: int = 900
     worker_queue: str = "markmonica:jobs"
