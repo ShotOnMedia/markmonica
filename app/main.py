@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 import hashlib
+import json
 import re
 import secrets
 import time
@@ -26,13 +27,7 @@ from app import __version__
 from app.db import engine, get_db
 from app.models import Event, Media, User, UserSession
 from app.security import hash_password, new_session, user_from_session_token, verify_password
-from app.services.storage import (
-    bucket_is_ready,
-    create_presigned_download,
-    create_presigned_upload,
-    ensure_bucket,
-    head_object,
-)
+from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, ensure_bucket, head_object
 from app.settings import settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -86,15 +81,7 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-    response.headers.setdefault(
-        "Content-Security-Policy",
-        "default-src 'self'; "
-        f"img-src 'self' data:{storage}; "
-        f"media-src 'self'{storage}; "
-        f"connect-src 'self'{storage}; "
-        "style-src 'self'; script-src 'self'; font-src 'self'; "
-        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
-    )
+    response.headers.setdefault("Content-Security-Policy", "default-src 'self'; " f"img-src 'self' data:{storage}; " f"media-src 'self'{storage}; " f"connect-src 'self'{storage}; " "style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
     if COOKIE_SECURE:
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
@@ -140,9 +127,16 @@ def enforce_guest_upload_rate_limit(request: Request, slug: str) -> None:
     except HTTPException:
         raise
     except RedisError:
-        # Uploads remain available if Redis has a transient issue; readiness will
-        # still report Redis degradation for operators.
         return
+
+
+def enqueue_media_processing(media_id: uuid.UUID) -> None:
+    """Best-effort immediate processing; worker polling remains the fallback."""
+    try:
+        redis = Redis.from_url(settings.redis_url, socket_connect_timeout=1, socket_timeout=1, decode_responses=True)
+        redis.rpush(settings.worker_queue, json.dumps({"type": "process_media", "media_id": str(media_id)}))
+    except RedisError:
+        pass
 
 
 def slugify(value: str) -> str:
@@ -189,15 +183,7 @@ def validate_upload(content_type: str, size_bytes: int) -> None:
 
 
 def set_session_cookie(response: Response, token: str) -> None:
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        secure=COOKIE_SECURE,
-        samesite="lax",
-        max_age=30 * 86400,
-        path="/",
-    )
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, secure=COOKIE_SECURE, samesite="lax", max_age=30 * 86400, path="/")
 
 
 @app.get("/health")
@@ -221,10 +207,7 @@ def readiness() -> Response:
         pass
     checks["storage"] = bucket_is_ready()
     ready = all(checks.values())
-    return JSONResponse(
-        {"status": "ready" if ready else "degraded", "checks": checks},
-        status_code=200 if ready else 503,
-    )
+    return JSONResponse({"status": "ready" if ready else "degraded", "checks": checks}, status_code=200 if ready else 503)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -240,22 +223,15 @@ def register_page(request: Request):
 @app.post("/register")
 def register(request: Request, display_name: str = Form(...), email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     require_same_origin(request)
-    email = email.strip().lower()
-    display_name = display_name.strip()
+    email = email.strip().lower(); display_name = display_name.strip()
     if len(password) < 8 or not display_name or "@" not in email:
         return templates.TemplateResponse(request=request, name="register.html", context={"error": "Please enter a name, valid email address and a password of at least 8 characters."}, status_code=400)
-    user = User(email=email, display_name=display_name, password_hash=hash_password(password))
-    db.add(user)
+    user = User(email=email, display_name=display_name, password_hash=hash_password(password)); db.add(user)
     try:
-        db.commit()
-        db.refresh(user)
+        db.commit(); db.refresh(user)
     except IntegrityError:
-        db.rollback()
-        return templates.TemplateResponse(request=request, name="register.html", context={"error": "An account with that email address already exists."}, status_code=409)
-    _, token = new_session(db, user)
-    response = RedirectResponse("/dashboard", status_code=303)
-    set_session_cookie(response, token)
-    return response
+        db.rollback(); return templates.TemplateResponse(request=request, name="register.html", context={"error": "An account with that email address already exists."}, status_code=409)
+    _, token = new_session(db, user); response = RedirectResponse("/dashboard", status_code=303); set_session_cookie(response, token); return response
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -269,61 +245,42 @@ def login(request: Request, email: str = Form(...), password: str = Form(...), d
     user = db.scalar(select(User).where(User.email == email.strip().lower(), User.is_active.is_(True)))
     if user is None or not verify_password(password, user.password_hash):
         return templates.TemplateResponse(request=request, name="login.html", context={"error": "Incorrect email address or password."}, status_code=401)
-    _, token = new_session(db, user)
-    response = RedirectResponse("/dashboard", status_code=303)
-    set_session_cookie(response, token)
-    return response
+    _, token = new_session(db, user); response = RedirectResponse("/dashboard", status_code=303); set_session_cookie(response, token); return response
 
 
 @app.post("/logout")
 def logout(request: Request, db: Session = Depends(get_db)):
-    require_same_origin(request)
-    token = request.cookies.get(SESSION_COOKIE)
+    require_same_origin(request); token = request.cookies.get(SESSION_COOKIE)
     if token:
-        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-        session = db.scalar(select(UserSession).where(UserSession.token_hash == token_hash))
-        if session:
-            db.delete(session)
-            db.commit()
-    response = RedirectResponse("/", status_code=303)
-    response.delete_cookie(SESSION_COOKIE, path="/")
-    return response
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest(); session = db.scalar(select(UserSession).where(UserSession.token_hash == token_hash))
+        if session: db.delete(session); db.commit()
+    response = RedirectResponse("/", status_code=303); response.delete_cookie(SESSION_COOKIE, path="/"); return response
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
+    if user is None: return RedirectResponse("/login", status_code=303)
     events = db.scalars(select(Event).where(Event.owner_id == user.id).order_by(Event.created_at.desc())).all()
     return templates.TemplateResponse(request=request, name="dashboard.html", context={"user": user, "events": events, "error": None})
 
 
 @app.post("/events")
 def create_event(request: Request, title: str = Form(...), event_date: str = Form(""), db: Session = Depends(get_db)):
-    require_same_origin(request)
-    user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
+    require_same_origin(request); user = current_user(request, db)
+    if user is None: return RedirectResponse("/login", status_code=303)
     title = title.strip()
-    if not title:
-        return RedirectResponse("/dashboard", status_code=303)
-    try:
-        parsed_date = date.fromisoformat(event_date) if event_date else None
-    except ValueError:
-        parsed_date = None
-    event = Event(owner_id=user.id, title=title, event_date=parsed_date, slug=f"{slugify(title)}-{secrets.token_hex(3)}")
-    db.add(event)
-    db.commit()
-    db.refresh(event)
+    if not title: return RedirectResponse("/dashboard", status_code=303)
+    try: parsed_date = date.fromisoformat(event_date) if event_date else None
+    except ValueError: parsed_date = None
+    event = Event(owner_id=user.id, title=title, event_date=parsed_date, slug=f"{slugify(title)}-{secrets.token_hex(3)}"); db.add(event); db.commit(); db.refresh(event)
     return RedirectResponse(f"/events/{event.id}", status_code=303)
 
 
 @app.get("/events/{event_id}", response_class=HTMLResponse)
 def manage_event(event_id: str, request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
+    if user is None: return RedirectResponse("/login", status_code=303)
     event = event_for_owner(db, user, event_id)
     media = db.scalars(select(Media).where(Media.event_id == event.id, Media.status == "uploaded").order_by(Media.created_at.desc())).all()
     return templates.TemplateResponse(request=request, name="event_manage.html", context={"user": user, "event": event, "guest_url": guest_url(event), "media": media})
@@ -331,90 +288,86 @@ def manage_event(event_id: str, request: Request, db: Session = Depends(get_db))
 
 @app.post("/events/{event_id}")
 def update_event(event_id: str, request: Request, title: str = Form(...), event_date: str = Form(""), status: str = Form("draft"), db: Session = Depends(get_db)):
-    require_same_origin(request)
-    user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    event = event_for_owner(db, user, event_id)
-    event.title = title.strip() or event.title
-    try:
-        event.event_date = date.fromisoformat(event_date) if event_date else None
-    except ValueError:
-        pass
-    event.status = "live" if status == "live" else "draft"
-    db.commit()
-    return RedirectResponse(f"/events/{event.id}", status_code=303)
+    require_same_origin(request); user = current_user(request, db)
+    if user is None: return RedirectResponse("/login", status_code=303)
+    event = event_for_owner(db, user, event_id); event.title = title.strip() or event.title
+    try: event.event_date = date.fromisoformat(event_date) if event_date else None
+    except ValueError: pass
+    event.status = "live" if status == "live" else "draft"; db.commit(); return RedirectResponse(f"/events/{event.id}", status_code=303)
 
 
 @app.get("/events/{event_id}/qr.png")
 def event_qr(event_id: str, request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    if user is None:
-        raise HTTPException(status_code=401)
-    event = event_for_owner(db, user, event_id)
-    image = qrcode.make(guest_url(event))
-    output = BytesIO()
-    image.save(output, format="PNG")
+    if user is None: raise HTTPException(status_code=401)
+    event = event_for_owner(db, user, event_id); image = qrcode.make(guest_url(event)); output = BytesIO(); image.save(output, format="PNG")
     return Response(output.getvalue(), media_type="image/png", headers={"Content-Disposition": f'inline; filename="{event.slug}-qr.png"'})
+
+
+def owned_media(db: Session, user: User, media_id: uuid.UUID) -> Media:
+    media = db.scalar(select(Media).join(Event).where(Media.id == media_id, Event.owner_id == user.id, Media.status == "uploaded"))
+    if media is None: raise HTTPException(status_code=404)
+    return media
 
 
 @app.get("/media/{media_id}")
 def view_media(media_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    if user is None:
-        return RedirectResponse("/login", status_code=303)
-    media = db.scalar(select(Media).join(Event).where(Media.id == media_id, Event.owner_id == user.id, Media.status == "uploaded"))
-    if media is None:
-        raise HTTPException(status_code=404)
+    if user is None: return RedirectResponse("/login", status_code=303)
+    media = owned_media(db, user, media_id)
     return RedirectResponse(create_presigned_download(media.object_key), status_code=302)
+
+
+@app.get("/media/{media_id}/preview")
+def preview_media(media_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    user = current_user(request, db)
+    if user is None: return RedirectResponse("/login", status_code=303)
+    media = owned_media(db, user, media_id)
+    key = media.preview_object_key or media.object_key
+    return RedirectResponse(create_presigned_download(key), status_code=302)
+
+
+@app.get("/media/{media_id}/play")
+def play_media(media_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    user = current_user(request, db)
+    if user is None: return RedirectResponse("/login", status_code=303)
+    media = owned_media(db, user, media_id)
+    key = media.processed_object_key or media.object_key
+    return RedirectResponse(create_presigned_download(key), status_code=302)
+
+
+@app.get("/media/{media_id}/poster")
+def poster_media(media_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    user = current_user(request, db)
+    if user is None: return RedirectResponse("/login", status_code=303)
+    media = owned_media(db, user, media_id)
+    if not media.poster_object_key: raise HTTPException(status_code=404)
+    return RedirectResponse(create_presigned_download(media.poster_object_key), status_code=302)
 
 
 @app.get("/e/{slug}", response_class=HTMLResponse)
 def guest_event(slug: str, request: Request, db: Session = Depends(get_db)):
     event = db.scalar(select(Event).where(Event.slug == slug))
-    if event is None:
-        raise HTTPException(status_code=404)
+    if event is None: raise HTTPException(status_code=404)
     return templates.TemplateResponse(request=request, name="guest_event.html", context={"event": event, "max_image_mb": settings.max_image_upload_mb, "max_video_mb": settings.max_video_upload_mb})
 
 
 @app.post("/api/events/{slug}/uploads")
 def initiate_upload(slug: str, payload: UploadRequest, request: Request, db: Session = Depends(get_db)):
-    enforce_guest_upload_rate_limit(request, slug)
-    event = live_event_by_slug(db, slug)
-    content_type = payload.content_type.lower().strip()
-    validate_upload(content_type, payload.size_bytes)
-    filename = safe_filename(payload.filename)
+    enforce_guest_upload_rate_limit(request, slug); event = live_event_by_slug(db, slug); content_type = payload.content_type.lower().strip(); validate_upload(content_type, payload.size_bytes); filename = safe_filename(payload.filename)
     object_key = f"events/{event.id}/{uuid.uuid4().hex}/{filename}"
-    media = Media(
-        event_id=event.id,
-        object_key=object_key,
-        original_filename=filename,
-        content_type=content_type,
-        size_bytes=payload.size_bytes,
-        uploader_name=(payload.guest_name or "").strip()[:160] or None,
-        status="uploading",
-    )
-    db.add(media)
-    db.commit()
-    db.refresh(media)
-    upload_url = create_presigned_upload(object_key, content_type)
+    media = Media(event_id=event.id, object_key=object_key, original_filename=filename, content_type=content_type, size_bytes=payload.size_bytes, uploader_name=(payload.guest_name or "").strip()[:160] or None, status="uploading")
+    db.add(media); db.commit(); db.refresh(media); upload_url = create_presigned_upload(object_key, content_type)
     return {"media_id": str(media.id), "upload_url": upload_url, "content_type": content_type, "expires_in": settings.upload_url_expiry_seconds}
 
 
 @app.post("/api/events/{slug}/uploads/confirm")
 def confirm_upload(slug: str, payload: UploadConfirmRequest, db: Session = Depends(get_db)):
-    event = live_event_by_slug(db, slug)
-    media = db.scalar(select(Media).where(Media.id == payload.media_id, Media.event_id == event.id, Media.status == "uploading"))
-    if media is None:
-        raise HTTPException(status_code=404, detail="Upload session not found.")
-    try:
-        uploaded = head_object(media.object_key)
-    except ClientError as exc:
-        raise HTTPException(status_code=409, detail="The uploaded object could not be verified yet.") from exc
-    actual_size = int(uploaded.get("ContentLength", 0))
-    actual_type = str(uploaded.get("ContentType", "")).lower()
-    if actual_size <= 0 or actual_size != media.size_bytes or (actual_type and actual_type != media.content_type.lower()):
-        raise HTTPException(status_code=409, detail="The uploaded object does not match the requested file.")
-    media.status = "uploaded"
-    db.commit()
-    return {"status": "uploaded", "media_id": str(media.id)}
+    event = live_event_by_slug(db, slug); media = db.scalar(select(Media).where(Media.id == payload.media_id, Media.event_id == event.id, Media.status == "uploading"))
+    if media is None: raise HTTPException(status_code=404, detail="Upload session not found.")
+    try: uploaded = head_object(media.object_key)
+    except ClientError as exc: raise HTTPException(status_code=409, detail="The uploaded object could not be verified yet.") from exc
+    actual_size = int(uploaded.get("ContentLength", 0)); actual_type = str(uploaded.get("ContentType", "")).lower()
+    if actual_size <= 0 or actual_size != media.size_bytes or (actual_type and actual_type != media.content_type.lower()): raise HTTPException(status_code=409, detail="The uploaded object does not match the requested file.")
+    media.status = "uploaded"; media.processing_status = "pending"; db.commit(); enqueue_media_processing(media.id)
+    return {"status": "uploaded", "media_id": str(media.id), "processing_status": "pending"}
