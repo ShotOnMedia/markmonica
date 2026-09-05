@@ -30,9 +30,7 @@ def _process_image(media: Media, workdir: Path) -> None:
 
     with Image.open(original) as source:
         image = ImageOps.exif_transpose(source)
-        if image.mode not in {"RGB", "L"}:
-            image = image.convert("RGB")
-        elif image.mode == "L":
+        if image.mode != "RGB":
             image = image.convert("RGB")
         image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
         image.save(preview, "WEBP", quality=82, method=6)
@@ -111,3 +109,22 @@ def process_media(media_id: uuid.UUID | str) -> bool:
                 db.commit()
             logger.exception("Media processing failed for %s", media_id)
             return False
+
+
+def process_next_pending() -> bool:
+    """Process one uploaded item waiting for derivatives.
+
+    Polling makes processing resilient to Redis/job-delivery failures and also
+    automatically backfills existing v0.2.0 uploads after migration.
+    """
+    with SessionLocal() as db:
+        media_id = db.scalar(
+            select(Media.id)
+            .where(Media.status == "uploaded", Media.processing_status == "pending")
+            .order_by(Media.created_at.asc())
+            .limit(1)
+        )
+    if media_id is None:
+        return False
+    process_media(media_id)
+    return True
