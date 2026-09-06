@@ -10,9 +10,11 @@
   const downloadSelected = gallery.querySelector('[data-download-selected]');
   const toolbar = gallery.querySelector('[data-selection-toolbar]');
   let activeFilter = 'all';
+  let lightboxIndex = -1;
 
   const selectedTiles = () => tiles.filter(tile => tile.querySelector('[data-media-select]').checked);
   const visibleTiles = () => tiles.filter(tile => !tile.hidden);
+  const lightboxItems = () => visibleTiles().map(tile => tile.querySelector('[data-lightbox-item]')).filter(Boolean);
 
   function refreshSelection() {
     const count = selectedTiles().length;
@@ -26,36 +28,28 @@
   function applyFilter(filter) {
     activeFilter = filter;
     filters.forEach(button => button.classList.toggle('is-active', button.dataset.filter === filter));
-    tiles.forEach(tile => {
-      tile.hidden = filter !== 'all' && tile.dataset.mediaType !== filter;
-    });
+    tiles.forEach(tile => { tile.hidden = filter !== 'all' && tile.dataset.mediaType !== filter; });
     const visible = visibleTiles();
     const selectedVisible = visible.filter(tile => tile.querySelector('[data-media-select]').checked);
     selectVisible.textContent = visible.length && selectedVisible.length === visible.length ? 'Clear visible' : 'Select visible';
   }
 
   filters.forEach(button => button.addEventListener('click', () => applyFilter(button.dataset.filter)));
-
   tiles.forEach(tile => {
     const checkbox = tile.querySelector('[data-media-select]');
-    checkbox.addEventListener('change', () => {
-      refreshSelection();
-      applyFilter(activeFilter);
-    });
+    checkbox.addEventListener('change', () => { refreshSelection(); applyFilter(activeFilter); });
   });
 
   selectVisible.addEventListener('click', () => {
     const visible = visibleTiles();
     const shouldSelect = visible.some(tile => !tile.querySelector('[data-media-select]').checked);
     visible.forEach(tile => { tile.querySelector('[data-media-select]').checked = shouldSelect; });
-    refreshSelection();
-    applyFilter(activeFilter);
+    refreshSelection(); applyFilter(activeFilter);
   });
 
   clearSelection.addEventListener('click', () => {
     tiles.forEach(tile => { tile.querySelector('[data-media-select]').checked = false; });
-    refreshSelection();
-    applyFilter(activeFilter);
+    refreshSelection(); applyFilter(activeFilter);
   });
 
   async function saveOriginal(tile) {
@@ -64,11 +58,8 @@
     const blob = await response.blob();
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url;
-    link.download = tile.dataset.filename || 'memory';
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    link.href = url; link.download = tile.dataset.filename || 'memory';
+    document.body.appendChild(link); link.click(); link.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
@@ -86,11 +77,54 @@
     } catch (error) {
       window.alert(`One or more downloads could not be completed. ${error.message}`);
     } finally {
-      downloadSelected.textContent = originalText;
-      refreshSelection();
+      downloadSelected.textContent = originalText; refreshSelection();
     }
   });
 
-  refreshSelection();
-  applyFilter('all');
+  const lightbox = document.createElement('div');
+  lightbox.className = 'gallery-lightbox';
+  lightbox.hidden = true;
+  lightbox.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close">×</button><button type="button" class="lightbox-nav lightbox-prev" aria-label="Previous">‹</button><div class="lightbox-stage"><img alt=""><div class="lightbox-caption"></div></div><button type="button" class="lightbox-nav lightbox-next" aria-label="Next">›</button>';
+  document.body.appendChild(lightbox);
+  const lightboxImage = lightbox.querySelector('img');
+  const lightboxCaption = lightbox.querySelector('.lightbox-caption');
+
+  function showLightbox(index) {
+    const items = lightboxItems();
+    if (!items.length) return;
+    lightboxIndex = (index + items.length) % items.length;
+    const item = items[lightboxIndex];
+    lightboxImage.src = item.href;
+    lightboxImage.alt = item.dataset.lightboxTitle || '';
+    lightboxCaption.textContent = item.dataset.lightboxTitle || '';
+    lightbox.hidden = false;
+    document.body.classList.add('lightbox-open');
+  }
+
+  function closeLightbox() {
+    lightbox.hidden = true;
+    lightboxImage.removeAttribute('src');
+    document.body.classList.remove('lightbox-open');
+    lightboxIndex = -1;
+  }
+
+  gallery.addEventListener('click', event => {
+    const item = event.target.closest('[data-lightbox-item]');
+    if (!item) return;
+    event.preventDefault();
+    const items = lightboxItems();
+    showLightbox(items.indexOf(item));
+  });
+  lightbox.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
+  lightbox.querySelector('.lightbox-prev').addEventListener('click', () => showLightbox(lightboxIndex - 1));
+  lightbox.querySelector('.lightbox-next').addEventListener('click', () => showLightbox(lightboxIndex + 1));
+  lightbox.addEventListener('click', event => { if (event.target === lightbox) closeLightbox(); });
+  document.addEventListener('keydown', event => {
+    if (lightbox.hidden) return;
+    if (event.key === 'Escape') closeLightbox();
+    if (event.key === 'ArrowLeft') showLightbox(lightboxIndex - 1);
+    if (event.key === 'ArrowRight') showLightbox(lightboxIndex + 1);
+  });
+
+  refreshSelection(); applyFilter('all');
 })();
