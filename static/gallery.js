@@ -1,145 +1,17 @@
 (() => {
-  const gallery = document.querySelector('[data-gallery]');
-  if (!gallery) return;
-
-  const tiles = [...gallery.querySelectorAll('[data-media-tile]')];
-  const filters = [...gallery.querySelectorAll('[data-filter]')];
-  const viewButtons = [...gallery.querySelectorAll('[data-view]')];
-  const mediaGrid = gallery.querySelector('[data-media-grid]');
-  const selectedCount = gallery.querySelector('[data-selected-count]');
-  const selectVisible = gallery.querySelector('[data-select-visible]');
-  const clearSelection = gallery.querySelector('[data-clear-selection]');
-  const downloadSelected = gallery.querySelector('[data-download-selected]');
-  const toolbar = gallery.querySelector('[data-selection-toolbar]');
-  let activeFilter = 'all';
-  let activeView = localStorage.getItem('markmonica-gallery-view') === 'list' ? 'list' : 'grid';
-  let lightboxIndex = -1;
-
-  const selectedTiles = () => tiles.filter(tile => tile.querySelector('[data-media-select]').checked);
-  const visibleTiles = () => tiles.filter(tile => !tile.hidden);
-  const lightboxItems = () => visibleTiles().map(tile => tile.querySelector('[data-lightbox-item]')).filter(Boolean);
-
-  function refreshSelection() {
-    const count = selectedTiles().length;
-    selectedCount.textContent = `${count} selected`;
-    downloadSelected.disabled = count === 0;
-    clearSelection.disabled = count === 0;
-    toolbar.classList.toggle('has-selection', count > 0);
-    tiles.forEach(tile => tile.classList.toggle('is-selected', tile.querySelector('[data-media-select]').checked));
-  }
-
-  function applyFilter(filter) {
-    activeFilter = filter;
-    filters.forEach(button => button.classList.toggle('is-active', button.dataset.filter === filter));
-    tiles.forEach(tile => { tile.hidden = filter !== 'all' && tile.dataset.mediaType !== filter; });
-    const visible = visibleTiles();
-    const selectedVisible = visible.filter(tile => tile.querySelector('[data-media-select]').checked);
-    selectVisible.textContent = visible.length && selectedVisible.length === visible.length ? 'Clear visible' : 'Select visible';
-  }
-
-  function applyView(view) {
-    activeView = view === 'list' ? 'list' : 'grid';
-    mediaGrid.classList.toggle('media-list', activeView === 'list');
-    viewButtons.forEach(button => {
-      const active = button.dataset.view === activeView;
-      button.classList.toggle('is-active', active);
-      button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    });
-    localStorage.setItem('markmonica-gallery-view', activeView);
-  }
-
-  filters.forEach(button => button.addEventListener('click', () => applyFilter(button.dataset.filter)));
-  viewButtons.forEach(button => button.addEventListener('click', () => applyView(button.dataset.view)));
-  tiles.forEach(tile => {
-    const checkbox = tile.querySelector('[data-media-select]');
-    checkbox.addEventListener('change', () => { refreshSelection(); applyFilter(activeFilter); });
-  });
-
-  selectVisible.addEventListener('click', () => {
-    const visible = visibleTiles();
-    const shouldSelect = visible.some(tile => !tile.querySelector('[data-media-select]').checked);
-    visible.forEach(tile => { tile.querySelector('[data-media-select]').checked = shouldSelect; });
-    refreshSelection(); applyFilter(activeFilter);
-  });
-
-  clearSelection.addEventListener('click', () => {
-    tiles.forEach(tile => { tile.querySelector('[data-media-select]').checked = false; });
-    refreshSelection(); applyFilter(activeFilter);
-  });
-
-  async function saveOriginal(tile) {
-    const response = await fetch(tile.dataset.originalUrl, { credentials: 'same-origin' });
-    if (!response.ok) throw new Error(`Download failed (${response.status})`);
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url; link.download = tile.dataset.filename || 'memory';
-    document.body.appendChild(link); link.click(); link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  downloadSelected.addEventListener('click', async () => {
-    const selected = selectedTiles();
-    if (!selected.length) return;
-    const originalText = downloadSelected.textContent;
-    downloadSelected.disabled = true;
-    try {
-      for (let index = 0; index < selected.length; index += 1) {
-        downloadSelected.textContent = `Downloading ${index + 1} of ${selected.length}…`;
-        await saveOriginal(selected[index]);
-        await new Promise(resolve => setTimeout(resolve, 250));
-      }
-    } catch (error) {
-      window.alert(`One or more downloads could not be completed. ${error.message}`);
-    } finally {
-      downloadSelected.textContent = originalText; refreshSelection();
-    }
-  });
-
-  const lightbox = document.createElement('div');
-  lightbox.className = 'gallery-lightbox';
-  lightbox.hidden = true;
-  lightbox.innerHTML = '<button type="button" class="lightbox-close" aria-label="Close">×</button><button type="button" class="lightbox-nav lightbox-prev" aria-label="Previous">‹</button><div class="lightbox-stage"><img alt=""><div class="lightbox-caption"></div></div><button type="button" class="lightbox-nav lightbox-next" aria-label="Next">›</button>';
-  document.body.appendChild(lightbox);
-  const lightboxImage = lightbox.querySelector('img');
-  const lightboxCaption = lightbox.querySelector('.lightbox-caption');
-
-  function showLightbox(index) {
-    const items = lightboxItems();
-    if (!items.length) return;
-    lightboxIndex = (index + items.length) % items.length;
-    const item = items[lightboxIndex];
-    lightboxImage.src = item.href;
-    lightboxImage.alt = item.dataset.lightboxTitle || '';
-    lightboxCaption.textContent = item.dataset.lightboxTitle || '';
-    lightbox.hidden = false;
-    document.body.classList.add('lightbox-open');
-  }
-
-  function closeLightbox() {
-    lightbox.hidden = true;
-    lightboxImage.removeAttribute('src');
-    document.body.classList.remove('lightbox-open');
-    lightboxIndex = -1;
-  }
-
-  gallery.addEventListener('click', event => {
-    const item = event.target.closest('[data-lightbox-item]');
-    if (!item) return;
-    event.preventDefault();
-    const items = lightboxItems();
-    showLightbox(items.indexOf(item));
-  });
-  lightbox.querySelector('.lightbox-close').addEventListener('click', closeLightbox);
-  lightbox.querySelector('.lightbox-prev').addEventListener('click', () => showLightbox(lightboxIndex - 1));
-  lightbox.querySelector('.lightbox-next').addEventListener('click', () => showLightbox(lightboxIndex + 1));
-  lightbox.addEventListener('click', event => { if (event.target === lightbox) closeLightbox(); });
-  document.addEventListener('keydown', event => {
-    if (lightbox.hidden) return;
-    if (event.key === 'Escape') closeLightbox();
-    if (event.key === 'ArrowLeft') showLightbox(lightboxIndex - 1);
-    if (event.key === 'ArrowRight') showLightbox(lightboxIndex + 1);
-  });
-
-  refreshSelection(); applyFilter('all'); applyView(activeView);
+ const g=document.querySelector('[data-gallery]');if(!g)return;const eventId=g.dataset.eventId,grid=g.querySelector('[data-media-grid]'),filters=[...g.querySelectorAll('[data-filter]')],views=[...g.querySelectorAll('[data-view]')],count=g.querySelector('[data-selected-count]'),selectVisible=g.querySelector('[data-select-visible]'),clear=g.querySelector('[data-clear-selection]'),download=g.querySelector('[data-download-selected]'),downloadAll=g.querySelector('[data-download-all]'),del=g.querySelector('[data-delete-selected]'),toolbar=g.querySelector('[data-selection-toolbar]'),archiveStatus=g.querySelector('[data-archive-status]');let activeFilter='all',activeView=localStorage.getItem('markmonica-gallery-view')==='list'?'list':'grid',lightboxIndex=-1;
+ const tiles=()=>[...g.querySelectorAll('[data-media-tile]')],selected=()=>tiles().filter(t=>t.querySelector('[data-media-select]').checked),visible=()=>tiles().filter(t=>!t.hidden),lightboxItems=()=>visible().map(t=>t.querySelector('[data-lightbox-item]')).filter(Boolean);
+ function refresh(){const n=selected().length;count.textContent=`${n} selected`;download.disabled=del.disabled=clear.disabled=n===0;toolbar.classList.toggle('has-selection',n>0);tiles().forEach(t=>t.classList.toggle('is-selected',t.querySelector('[data-media-select]').checked));}
+ function filter(f){activeFilter=f;filters.forEach(b=>b.classList.toggle('is-active',b.dataset.filter===f));tiles().forEach(t=>t.hidden=f!=='all'&&t.dataset.mediaType!==f);const v=visible();selectVisible.textContent=v.length&&v.every(t=>t.querySelector('[data-media-select]').checked)?'Clear visible':'Select visible';}
+ function view(v){activeView=v==='list'?'list':'grid';grid.classList.toggle('media-list',activeView==='list');views.forEach(b=>b.classList.toggle('is-active',b.dataset.view===activeView));localStorage.setItem('markmonica-gallery-view',activeView);}
+ filters.forEach(b=>b.onclick=()=>filter(b.dataset.filter));views.forEach(b=>b.onclick=()=>view(b.dataset.view));tiles().forEach(t=>t.querySelector('[data-media-select]').onchange=()=>{refresh();filter(activeFilter)});
+ selectVisible.onclick=()=>{const v=visible(),on=v.some(t=>!t.querySelector('[data-media-select]').checked);v.forEach(t=>t.querySelector('[data-media-select]').checked=on);refresh();filter(activeFilter)};clear.onclick=()=>{tiles().forEach(t=>t.querySelector('[data-media-select]').checked=false);refresh();filter(activeFilter)};
+ async function api(url,options={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json'},...options});let data={};try{data=await r.json()}catch{}if(!r.ok)throw new Error(data.detail||`Request failed (${r.status})`);return data;}
+ async function archive(ids){archiveStatus.textContent='Preparing ZIP…';download.disabled=true;downloadAll.disabled=true;try{const created=await api(`/api/events/${eventId}/archives`,{method:'POST',body:JSON.stringify({media_ids:ids})});for(let i=0;i<240;i++){await new Promise(r=>setTimeout(r,1500));const job=await api(`/api/events/${eventId}/archives/${created.job_id}`);if(job.status==='ready'){archiveStatus.textContent='ZIP ready — downloading…';window.location.href=job.download_url;setTimeout(()=>archiveStatus.textContent='',3000);return}if(job.status==='failed')throw new Error(job.error||'ZIP creation failed');}throw new Error('ZIP creation is taking longer than expected.')}catch(e){archiveStatus.textContent='';alert(e.message)}finally{downloadAll.disabled=false;refresh()}}
+ download.onclick=()=>archive(selected().map(t=>t.dataset.mediaId));downloadAll.onclick=()=>archive(null);
+ del.onclick=async()=>{const s=selected();if(!s.length)return;const n=s.length;if(!confirm(`Permanently delete ${n} selected ${n===1?'memory':'memories'}?\n\nThis removes the original and all generated copies and cannot be undone.`))return;del.disabled=true;del.textContent='Deleting…';try{await api(`/api/events/${eventId}/media/delete`,{method:'POST',body:JSON.stringify({media_ids:s.map(t=>t.dataset.mediaId)})});s.forEach(t=>t.remove());location.reload()}catch(e){alert(`Delete failed: ${e.message}`);del.textContent='Delete selected';refresh()}};
+ const lb=document.createElement('div');lb.className='gallery-lightbox';lb.hidden=true;lb.innerHTML='<button class="lightbox-close" aria-label="Close">×</button><button class="lightbox-nav lightbox-prev" aria-label="Previous">‹</button><div class="lightbox-stage"><img alt=""><div class="lightbox-caption"></div></div><button class="lightbox-nav lightbox-next" aria-label="Next">›</button>';document.body.appendChild(lb);const img=lb.querySelector('img'),caption=lb.querySelector('.lightbox-caption');
+ function show(i){const items=lightboxItems();if(!items.length)return;lightboxIndex=(i+items.length)%items.length;const item=items[lightboxIndex];img.src=item.href;img.alt=caption.textContent=item.dataset.lightboxTitle||'';lb.hidden=false;document.body.classList.add('lightbox-open')};function closeLb(){lb.hidden=true;img.removeAttribute('src');document.body.classList.remove('lightbox-open');lightboxIndex=-1}
+ g.addEventListener('click',e=>{const item=e.target.closest('[data-lightbox-item]');if(!item)return;e.preventDefault();show(lightboxItems().indexOf(item))});lb.querySelector('.lightbox-close').onclick=closeLb;lb.querySelector('.lightbox-prev').onclick=()=>show(lightboxIndex-1);lb.querySelector('.lightbox-next').onclick=()=>show(lightboxIndex+1);lb.onclick=e=>{if(e.target===lb)closeLb()};document.addEventListener('keydown',e=>{if(lb.hidden)return;if(e.key==='Escape')closeLb();if(e.key==='ArrowLeft')show(lightboxIndex-1);if(e.key==='ArrowRight')show(lightboxIndex+1)});
+ refresh();filter('all');view(activeView);
 })();
