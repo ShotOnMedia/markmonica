@@ -4,12 +4,15 @@
 
   const tiles = [...gallery.querySelectorAll('[data-media-tile]')];
   const filters = [...gallery.querySelectorAll('[data-filter]')];
+  const viewButtons = [...gallery.querySelectorAll('[data-view]')];
+  const mediaGrid = gallery.querySelector('[data-media-grid]');
   const selectedCount = gallery.querySelector('[data-selected-count]');
   const selectVisible = gallery.querySelector('[data-select-visible]');
   const clearSelection = gallery.querySelector('[data-clear-selection]');
   const downloadSelected = gallery.querySelector('[data-download-selected]');
   const toolbar = gallery.querySelector('[data-selection-toolbar]');
   let activeFilter = 'all';
+  let activeView = localStorage.getItem('markmonica-gallery-view') === 'list' ? 'list' : 'grid';
   let lightboxIndex = -1;
 
   const selectedTiles = () => tiles.filter(tile => tile.querySelector('[data-media-select]').checked);
@@ -34,7 +37,19 @@
     selectVisible.textContent = visible.length && selectedVisible.length === visible.length ? 'Clear visible' : 'Select visible';
   }
 
+  function applyView(view) {
+    activeView = view === 'list' ? 'list' : 'grid';
+    mediaGrid.classList.toggle('media-list', activeView === 'list');
+    viewButtons.forEach(button => {
+      const active = button.dataset.view === activeView;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    localStorage.setItem('markmonica-gallery-view', activeView);
+  }
+
   filters.forEach(button => button.addEventListener('click', () => applyFilter(button.dataset.filter)));
+  viewButtons.forEach(button => button.addEventListener('click', () => applyView(button.dataset.view)));
   tiles.forEach(tile => {
     const checkbox = tile.querySelector('[data-media-select]');
     checkbox.addEventListener('change', () => { refreshSelection(); applyFilter(activeFilter); });
@@ -126,5 +141,5 @@
     if (event.key === 'ArrowRight') showLightbox(lightboxIndex + 1);
   });
 
-  refreshSelection(); applyFilter('all');
+  refreshSelection(); applyFilter('all'); applyView(activeView);
 })();
