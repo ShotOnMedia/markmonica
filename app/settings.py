@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     guest_upload_rate_limit_per_minute: int = 30
     stale_upload_hours: int = 2
     stale_upload_cleanup_interval_seconds: int = 900
+    archive_retention_hours: int = 24
+    archive_cleanup_interval_seconds: int = 900
     worker_queue: str = "markmonica:jobs"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
