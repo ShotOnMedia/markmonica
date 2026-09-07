@@ -28,14 +28,14 @@ from app.settings import settings
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates")); SESSION_COOKIE = "markmonica_session"
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}; ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-m4v", "video/webm"}
+ALLOWED_EVENT_THEMES={"classic","romantic","modern"}; DEFAULT_ACCENT_COLOR="#7c5cff"
 
 def origin_for(url):
     if not url: return None
     parsed=urlparse(url); return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else None
 APP_ORIGIN=origin_for(settings.app_url); STORAGE_ORIGIN=origin_for(settings.s3_public_endpoint_url or settings.s3_endpoint_url); COOKIE_SECURE=bool(APP_ORIGIN and APP_ORIGIN.startswith("https://"))
 
-class UploadRequest(BaseModel):
-    filename:str; content_type:str; size_bytes:int; guest_name:str|None=None
+class UploadRequest(BaseModel): filename:str; content_type:str; size_bytes:int; guest_name:str|None=None
 class UploadConfirmRequest(BaseModel): media_id:uuid.UUID
 class MediaIdsRequest(BaseModel): media_ids:list[uuid.UUID]
 class ArchiveRequest(BaseModel): media_ids:list[uuid.UUID]|None=None
@@ -80,6 +80,10 @@ def enqueue(job):
 def enqueue_media_processing(media_id): enqueue({"type":"process_media","media_id":str(media_id)})
 def slugify(value): return re.sub(r"[^a-z0-9]+","-",value.lower()).strip("-")[:90] or "event"
 def safe_filename(value): return re.sub(r"[^A-Za-z0-9._-]+","-",Path(value).name).strip("-.")[:180] or "upload"
+def clean_message(value,max_length=1200): return (value or "").strip()[:max_length] or None
+def clean_accent_color(value):
+    value=(value or "").strip()
+    return value.lower() if re.fullmatch(r"#[0-9a-fA-F]{6}",value) else DEFAULT_ACCENT_COLOR
 def event_for_owner(db,user,event_id):
     event=db.scalar(select(Event).where(Event.id==event_id,Event.owner_id==user.id))
     if event is None:raise HTTPException(404)
@@ -155,13 +159,13 @@ def manage_event(event_id:str,request:Request,db:Session=Depends(get_db)):
     if user is None:return RedirectResponse("/login",303)
     event=event_for_owner(db,user,event_id);media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded").order_by(Media.created_at.desc())).all();return templates.TemplateResponse(request=request,name="event_manage.html",context={"user":user,"event":event,"guest_url":guest_url(event),"media":media})
 @app.post("/events/{event_id}")
-def update_event(event_id:str,request:Request,title:str=Form(...),event_date:str=Form(""),status:str=Form("draft"),db:Session=Depends(get_db)):
+def update_event(event_id:str,request:Request,title:str=Form(...),event_date:str=Form(""),status:str=Form("draft"),welcome_message:str=Form(""),thank_you_message:str=Form(""),theme:str=Form("classic"),accent_color:str=Form(DEFAULT_ACCENT_COLOR),guest_gallery_enabled:str|None=Form(None),db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
     event=event_for_owner(db,user,event_id);event.title=title.strip() or event.title
     try:event.event_date=date.fromisoformat(event_date) if event_date else None
     except ValueError:pass
-    event.status="live" if status=="live" else "draft";db.commit();return RedirectResponse(f"/events/{event.id}",303)
+    event.status="live" if status=="live" else "draft";event.welcome_message=clean_message(welcome_message);event.thank_you_message=clean_message(thank_you_message);event.theme=theme if theme in ALLOWED_EVENT_THEMES else "classic";event.accent_color=clean_accent_color(accent_color);event.guest_gallery_enabled=guest_gallery_enabled is not None;db.commit();return RedirectResponse(f"/events/{event.id}",303)
 @app.get("/events/{event_id}/qr.png")
 def event_qr(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
@@ -208,7 +212,6 @@ def delete_media(event_id:uuid.UUID,payload:MediaIdsRequest,request:Request,db:S
     delete_objects(keys)
     for item in items:db.delete(item)
     db.commit();return {"status":"deleted","count":len(items)}
-
 @app.post("/api/events/{event_id}/archives")
 def create_archive(event_id:uuid.UUID,payload:ArchiveRequest,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
@@ -238,7 +241,19 @@ def download_archive(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Sess
 def guest_event(slug:str,request:Request,db:Session=Depends(get_db)):
     event=db.scalar(select(Event).where(Event.slug==slug))
     if event is None:raise HTTPException(404)
-    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":settings.max_video_upload_mb})
+    gallery=[]
+    if event.status=="live" and event.guest_gallery_enabled:
+        gallery=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc()).limit(60)).all()
+    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"gallery":gallery,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":settings.max_video_upload_mb})
+@app.get("/e/{slug}/media/{media_id}/preview")
+def guest_media_preview(slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
+    event=live_event_by_slug(db,slug)
+    if not event.guest_gallery_enabled:raise HTTPException(404)
+    media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready"))
+    if not media:raise HTTPException(404)
+    key=media.preview_object_key or media.poster_object_key
+    if not key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(key),302)
 @app.post("/api/events/{slug}/uploads")
 def initiate_upload(slug:str,payload:UploadRequest,request:Request,db:Session=Depends(get_db)):
     enforce_guest_upload_rate_limit(request,slug);event=live_event_by_slug(db,slug);content_type=payload.content_type.lower().strip();validate_upload(content_type,payload.size_bytes);filename=safe_filename(payload.filename);object_key=f"events/{event.id}/{uuid.uuid4().hex}/{filename}";media=Media(event_id=event.id,object_key=object_key,original_filename=filename,content_type=content_type,size_bytes=payload.size_bytes,uploader_name=(payload.guest_name or "").strip()[:160] or None,status="uploading");db.add(media);db.commit();db.refresh(media);return {"media_id":str(media.id),"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type,"expires_in":settings.upload_url_expiry_seconds}
