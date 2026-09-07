@@ -214,8 +214,6 @@ def owner_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     if not event.cover_object_key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(event.cover_object_key),302)
 
-# Media/gallery routes
-
 def owned_media(db,user,media_id):
     media=db.scalar(select(Media).join(Event).where(Media.id==media_id,Event.owner_id==user.id,Media.status=="uploaded"))
     if media is None:raise HTTPException(404)
@@ -242,7 +240,6 @@ def poster_media(media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     media=owned_media(db,user,media_id)
     if not media.poster_object_key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(media.poster_object_key),302)
-
 @app.post("/api/events/{event_id}/media/delete")
 def delete_media(event_id:uuid.UUID,payload:MediaIdsRequest,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
@@ -294,15 +291,22 @@ def guest_cover(slug:str,db:Session=Depends(get_db)):
     event=db.scalar(select(Event).where(Event.slug==slug))
     if event is None or not event.cover_object_key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(event.cover_object_key),302)
-@app.get("/e/{slug}/media/{media_id}/preview")
-def guest_media_preview(slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
+def guest_gallery_media(db,slug,media_id):
     event=live_event_by_slug(db,slug)
     if not event.guest_gallery_enabled:raise HTTPException(404)
     media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready"))
     if not media:raise HTTPException(404)
-    key=media.preview_object_key or media.poster_object_key
+    return media
+@app.get("/e/{slug}/media/{media_id}/preview")
+def guest_media_preview(slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
+    media=guest_gallery_media(db,slug,media_id);key=media.preview_object_key or media.poster_object_key
     if not key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(key),302)
+@app.get("/e/{slug}/media/{media_id}/play")
+def guest_media_play(slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
+    media=guest_gallery_media(db,slug,media_id)
+    if not media.content_type.startswith("video/") or not media.processed_object_key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(media.processed_object_key),302)
 @app.post("/api/events/{slug}/uploads")
 def initiate_upload(slug:str,payload:UploadRequest,request:Request,db:Session=Depends(get_db)):
     enforce_guest_upload_rate_limit(request,slug);event=live_event_by_slug(db,slug);content_type=payload.content_type.lower().strip();validate_upload(content_type,payload.size_bytes);filename=safe_filename(payload.filename);object_key=f"events/{event.id}/{uuid.uuid4().hex}/{filename}";media=Media(event_id=event.id,object_key=object_key,original_filename=filename,content_type=content_type,size_bytes=payload.size_bytes,uploader_name=(payload.guest_name or "").strip()[:160] or None,status="uploading");db.add(media);db.commit();db.refresh(media);return {"media_id":str(media.id),"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type,"expires_in":settings.upload_url_expiry_seconds}
