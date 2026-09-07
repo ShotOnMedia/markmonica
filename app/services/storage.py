@@ -1,5 +1,6 @@
 import logging
 import time
+from pathlib import Path
 
 import boto3
 from botocore.config import Config
@@ -11,115 +12,53 @@ logger = logging.getLogger(__name__)
 
 
 def _client(endpoint_url: str | None):
-    kwargs = {
-        "service_name": "s3",
-        "aws_access_key_id": settings.s3_access_key,
-        "aws_secret_access_key": settings.s3_secret_key,
-        "region_name": settings.s3_region,
-        "config": Config(
-            signature_version="s3v4",
-            s3={"addressing_style": "path" if settings.s3_force_path_style else "virtual"},
-        ),
-    }
-    if endpoint_url:
-        kwargs["endpoint_url"] = endpoint_url
+    kwargs = {"service_name": "s3", "aws_access_key_id": settings.s3_access_key, "aws_secret_access_key": settings.s3_secret_key, "region_name": settings.s3_region, "config": Config(signature_version="s3v4", s3={"addressing_style": "path" if settings.s3_force_path_style else "virtual"})}
+    if endpoint_url: kwargs["endpoint_url"] = endpoint_url
     return boto3.client(**kwargs)
 
 
-def get_s3_client():
-    return _client(settings.s3_endpoint_url)
-
-
-def get_public_s3_client():
-    return _client(settings.s3_public_endpoint_url or settings.s3_endpoint_url)
-
+def get_s3_client(): return _client(settings.s3_endpoint_url)
+def get_public_s3_client(): return _client(settings.s3_public_endpoint_url or settings.s3_endpoint_url)
 
 def bucket_is_ready() -> bool:
-    try:
-        get_s3_client().head_bucket(Bucket=settings.s3_bucket)
-        return True
-    except (ClientError, EndpointConnectionError):
-        return False
-
+    try: get_s3_client().head_bucket(Bucket=settings.s3_bucket); return True
+    except (ClientError, EndpointConnectionError): return False
 
 def ensure_bucket(max_attempts: int = 20, delay_seconds: float = 1.5) -> None:
     client = get_s3_client()
-
     for attempt in range(1, max_attempts + 1):
-        try:
-            client.head_bucket(Bucket=settings.s3_bucket)
-            _ensure_cors(client)
-            logger.info("Object storage bucket '%s' is ready", settings.s3_bucket)
-            return
+        try: client.head_bucket(Bucket=settings.s3_bucket); _ensure_cors(client); logger.info("Object storage bucket '%s' is ready", settings.s3_bucket); return
         except EndpointConnectionError:
-            if attempt == max_attempts:
-                raise
-            logger.info("Object storage is not ready yet (%s/%s)", attempt, max_attempts)
-            time.sleep(delay_seconds)
+            if attempt == max_attempts: raise
+            logger.info("Object storage is not ready yet (%s/%s)", attempt, max_attempts); time.sleep(delay_seconds)
         except ClientError as exc:
-            code = str(exc.response.get("Error", {}).get("Code", ""))
-            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            if code in {"404", "NoSuchBucket", "NotFound"} or status == 404:
-                logger.info("Creating object storage bucket '%s'", settings.s3_bucket)
-                client.create_bucket(Bucket=settings.s3_bucket)
-                _ensure_cors(client)
-                return
+            code = str(exc.response.get("Error", {}).get("Code", "")); status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if code in {"404", "NoSuchBucket", "NotFound"} or status == 404: logger.info("Creating object storage bucket '%s'", settings.s3_bucket); client.create_bucket(Bucket=settings.s3_bucket); _ensure_cors(client); return
             raise
 
-
 def _ensure_cors(client) -> bool:
-    """Best-effort bucket CORS configuration.
-
-    Some S3-compatible development backends, including certain MinIO
-    configurations, do not implement PutBucketCors. CORS is required for
-    browser-direct uploads but must not prevent the API from starting.
-    Production storage can support this API, while MinIO CORS can be
-    configured independently at the server/proxy layer.
-    """
     origin = settings.app_url.rstrip("/")
     try:
-        client.put_bucket_cors(
-            Bucket=settings.s3_bucket,
-            CORSConfiguration={
-                "CORSRules": [
-                    {
-                        "AllowedHeaders": ["*"],
-                        "AllowedMethods": ["GET", "HEAD", "PUT"],
-                        "AllowedOrigins": [origin],
-                        "ExposeHeaders": ["ETag"],
-                        "MaxAgeSeconds": 3600,
-                    }
-                ]
-            },
-        )
-        logger.info("Configured CORS for object storage bucket '%s'", settings.s3_bucket)
-        return True
+        client.put_bucket_cors(Bucket=settings.s3_bucket, CORSConfiguration={"CORSRules": [{"AllowedHeaders": ["*"], "AllowedMethods": ["GET", "HEAD", "PUT"], "AllowedOrigins": [origin], "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3600}]}); logger.info("Configured CORS for object storage bucket '%s'", settings.s3_bucket); return True
     except ClientError as exc:
-        code = str(exc.response.get("Error", {}).get("Code", ""))
-        logger.warning(
-            "Unable to configure CORS for bucket '%s' via S3 API (%s); "
-            "continuing because bucket CORS can be configured separately",
-            settings.s3_bucket,
-            code or exc.__class__.__name__,
-        )
-        return False
-
+        code = str(exc.response.get("Error", {}).get("Code", "")); logger.warning("Unable to configure CORS for bucket '%s' via S3 API (%s); continuing because bucket CORS can be configured separately", settings.s3_bucket, code or exc.__class__.__name__); return False
 
 def create_presigned_upload(object_key: str, content_type: str) -> str:
-    return get_public_s3_client().generate_presigned_url(
-        "put_object",
-        Params={"Bucket": settings.s3_bucket, "Key": object_key, "ContentType": content_type},
-        ExpiresIn=settings.upload_url_expiry_seconds,
-    )
-
+    return get_public_s3_client().generate_presigned_url("put_object", Params={"Bucket": settings.s3_bucket, "Key": object_key, "ContentType": content_type}, ExpiresIn=settings.upload_url_expiry_seconds)
 
 def create_presigned_download(object_key: str, expires_in: int = 900) -> str:
-    return get_public_s3_client().generate_presigned_url(
-        "get_object",
-        Params={"Bucket": settings.s3_bucket, "Key": object_key},
-        ExpiresIn=expires_in,
-    )
+    return get_public_s3_client().generate_presigned_url("get_object", Params={"Bucket": settings.s3_bucket, "Key": object_key}, ExpiresIn=expires_in)
 
+def head_object(object_key: str): return get_s3_client().head_object(Bucket=settings.s3_bucket, Key=object_key)
+def download_object(object_key: str, destination: str | Path) -> None: get_s3_client().download_file(settings.s3_bucket, object_key, str(destination))
+def upload_object(source: str | Path, object_key: str, content_type: str) -> None: get_s3_client().upload_file(str(source), settings.s3_bucket, object_key, ExtraArgs={"ContentType": content_type})
 
-def head_object(object_key: str):
-    return get_s3_client().head_object(Bucket=settings.s3_bucket, Key=object_key)
+def delete_objects(object_keys: list[str | None]) -> None:
+    """Delete the supplied object keys. Missing objects are harmless; other storage errors propagate."""
+    keys = list(dict.fromkeys(key for key in object_keys if key))
+    if not keys: return
+    client = get_s3_client()
+    for start in range(0, len(keys), 1000):
+        response = client.delete_objects(Bucket=settings.s3_bucket, Delete={"Objects": [{"Key": key} for key in keys[start:start + 1000]], "Quiet": True})
+        errors = response.get("Errors", [])
+        if errors: raise RuntimeError("Object deletion failed: " + "; ".join(f"{e.get('Key')}: {e.get('Code')}" for e in errors[:5]))

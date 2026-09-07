@@ -6,7 +6,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN addgroup --system markmonica && adduser --system --ingroup markmonica markmonica
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && addgroup --system markmonica \
+    && adduser --system --ingroup markmonica markmonica
 
 COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt

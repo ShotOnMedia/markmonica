@@ -6,14 +6,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
+def utcnow() -> datetime: return datetime.now(timezone.utc)
 
 class User(Base):
     __tablename__ = "users"
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -21,26 +17,20 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
-
     events: Mapped[list["Event"]] = relationship(back_populates="owner", cascade="all, delete-orphan")
     sessions: Mapped[list["UserSession"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
-
 class UserSession(Base):
     __tablename__ = "user_sessions"
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-
     user: Mapped[User] = relationship(back_populates="sessions")
-
 
 class Event(Base):
     __tablename__ = "events"
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
     slug: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
@@ -50,14 +40,12 @@ class Event(Base):
     gallery_visibility: Mapped[str] = mapped_column(String(32), default="approved", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
-
     owner: Mapped[User] = relationship(back_populates="events")
     media: Mapped[list["Media"]] = relationship(back_populates="event", cascade="all, delete-orphan")
-
+    archive_jobs: Mapped[list["ArchiveJob"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
 class Media(Base):
     __tablename__ = "media"
-
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
     object_key: Mapped[str] = mapped_column(String(1024), unique=True, nullable=False)
@@ -67,6 +55,24 @@ class Media(Base):
     uploader_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
+    processing_status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
+    preview_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    poster_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    processed_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    processed_content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
-
     event: Mapped[Event] = relationship(back_populates="media")
+
+class ArchiveJob(Base):
+    __tablename__ = "archive_jobs"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    requested_media_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True, nullable=False)
+    object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    event: Mapped[Event] = relationship(back_populates="archive_jobs")
