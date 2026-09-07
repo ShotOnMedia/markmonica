@@ -49,3 +49,18 @@ def build_archive(job_id: uuid.UUID | str) -> bool:
             db.rollback(); job = db.scalar(select(ArchiveJob).where(ArchiveJob.id == job_uuid))
             if job: job.status = "failed"; job.error = str(exc)[:2000]; db.commit()
             return False
+
+
+def process_next_archive() -> bool:
+    """Recover queued archive jobs even when their Redis enqueue was missed."""
+    with SessionLocal() as db:
+        job_id = db.scalar(
+            select(ArchiveJob.id)
+            .where(ArchiveJob.status == "queued")
+            .order_by(ArchiveJob.created_at.asc())
+            .limit(1)
+        )
+    if not job_id:
+        return False
+    build_archive(job_id)
+    return True

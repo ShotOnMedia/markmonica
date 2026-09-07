@@ -6,7 +6,7 @@ import time
 from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.services.archive import build_archive
+from app.services.archive import build_archive, process_next_archive
 from app.services.media_processing import process_media, process_next_pending
 from app.services.upload_cleanup import cleanup_stale_uploads
 from app.settings import settings
@@ -41,10 +41,17 @@ def run_pending_media() -> None:
             if not process_next_pending(): break
     except Exception: logger.exception("Pending media processing failed")
 
+def run_pending_archives() -> None:
+    try:
+        for _ in range(2):
+            if not process_next_archive(): break
+    except Exception: logger.exception("Pending archive processing failed")
+
 def main() -> None:
     signal.signal(signal.SIGTERM, stop_worker); signal.signal(signal.SIGINT, stop_worker)
     redis = Redis.from_url(settings.redis_url, decode_responses=True); logger.info("MarkMonica worker started; queue=%s", settings.worker_queue)
-    run_cleanup(); run_pending_media(); next_cleanup = time.monotonic() + settings.stale_upload_cleanup_interval_seconds; next_media_poll = time.monotonic() + 10
+    run_cleanup(); run_pending_media(); run_pending_archives()
+    next_cleanup = time.monotonic() + settings.stale_upload_cleanup_interval_seconds; next_media_poll = time.monotonic() + 10; next_archive_poll = time.monotonic() + 10
     while running:
         try:
             item = redis.blpop(settings.worker_queue, timeout=5)
@@ -53,6 +60,7 @@ def main() -> None:
                 except Exception: logger.exception("Job failed")
         except RedisConnectionError: logger.warning("Redis unavailable; retrying in 3 seconds"); time.sleep(3)
         if time.monotonic() >= next_media_poll: run_pending_media(); next_media_poll = time.monotonic() + 10
+        if time.monotonic() >= next_archive_poll: run_pending_archives(); next_archive_poll = time.monotonic() + 10
         if time.monotonic() >= next_cleanup: run_cleanup(); next_cleanup = time.monotonic() + settings.stale_upload_cleanup_interval_seconds
     logger.info("MarkMonica worker stopped")
 
