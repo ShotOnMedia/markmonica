@@ -2,7 +2,7 @@ services:
   app:
     build:
       context: .
-    image: ${MARKMONICA_IMAGE:-markmonica:0.2.0}
+    image: ${MARKMONICA_IMAGE:-markmonica:0.4.0}
     restart: unless-stopped
     env_file:
       - .env
@@ -20,7 +20,7 @@ services:
   worker:
     build:
       context: .
-    image: ${MARKMONICA_IMAGE:-markmonica:0.2.0}
+    image: ${MARKMONICA_IMAGE:-markmonica:0.4.0}
     restart: unless-stopped
     command: ["python", "-m", "worker.main"]
     healthcheck:
