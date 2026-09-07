@@ -28,6 +28,7 @@ from app.settings import settings
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates")); SESSION_COOKIE = "markmonica_session"
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}; ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-m4v", "video/webm"}
+ALLOWED_COVER_TYPES={"image/jpeg","image/png","image/webp"}; MAX_COVER_BYTES=15*1024*1024
 ALLOWED_EVENT_THEMES={"classic","romantic","modern"}; DEFAULT_ACCENT_COLOR="#7c5cff"
 
 def origin_for(url):
@@ -37,6 +38,8 @@ APP_ORIGIN=origin_for(settings.app_url); STORAGE_ORIGIN=origin_for(settings.s3_p
 
 class UploadRequest(BaseModel): filename:str; content_type:str; size_bytes:int; guest_name:str|None=None
 class UploadConfirmRequest(BaseModel): media_id:uuid.UUID
+class CoverUploadRequest(BaseModel): filename:str; content_type:str; size_bytes:int
+class CoverConfirmRequest(BaseModel): object_key:str; content_type:str; size_bytes:int
 class MediaIdsRequest(BaseModel): media_ids:list[uuid.UUID]
 class ArchiveRequest(BaseModel): media_ids:list[uuid.UUID]|None=None
 
@@ -100,6 +103,10 @@ def validate_upload(content_type,size_bytes):
     elif content_type in ALLOWED_VIDEO_TYPES:limit=settings.max_video_upload_mb*1024*1024
     else:raise HTTPException(415,"This photo or video format is not supported.")
     if size_bytes>limit:raise HTTPException(413,"This file is larger than the event upload limit.")
+def validate_cover(content_type,size_bytes):
+    if content_type not in ALLOWED_COVER_TYPES:raise HTTPException(415,"Cover photos must be JPG, PNG or WebP.")
+    if size_bytes<=0:raise HTTPException(400,"Empty files cannot be uploaded.")
+    if size_bytes>MAX_COVER_BYTES:raise HTTPException(413,"Cover photos must be 15 MB or smaller.")
 def set_session_cookie(response,token):response.set_cookie(SESSION_COOKIE,token,httponly=True,secure=COOKIE_SECURE,samesite="lax",max_age=30*86400,path="/")
 
 @app.get("/health")
@@ -171,6 +178,43 @@ def event_qr(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:raise HTTPException(401)
     event=event_for_owner(db,user,event_id);image=qrcode.make(guest_url(event));output=BytesIO();image.save(output,format="PNG");return Response(output.getvalue(),media_type="image/png",headers={"Content-Disposition":f'inline; filename="{event.slug}-qr.png"'})
+@app.post("/api/events/{event_id}/cover")
+def initiate_cover(event_id:uuid.UUID,payload:CoverUploadRequest,request:Request,db:Session=Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:raise HTTPException(401)
+    event=event_for_owner(db,user,event_id);content_type=payload.content_type.lower().strip();validate_cover(content_type,payload.size_bytes);ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"}[content_type];object_key=f"events/{event.id}/cover/{uuid.uuid4().hex}.{ext}";return {"object_key":object_key,"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type}
+@app.post("/api/events/{event_id}/cover/confirm")
+def confirm_cover(event_id:uuid.UUID,payload:CoverConfirmRequest,request:Request,db:Session=Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:raise HTTPException(401)
+    event=event_for_owner(db,user,event_id);content_type=payload.content_type.lower().strip();validate_cover(content_type,payload.size_bytes);prefix=f"events/{event.id}/cover/"
+    if not payload.object_key.startswith(prefix):raise HTTPException(400,"Invalid cover object.")
+    try:uploaded=head_object(payload.object_key)
+    except ClientError as exc:raise HTTPException(409,"The cover photo could not be verified yet.") from exc
+    if int(uploaded.get("ContentLength",0))!=payload.size_bytes:raise HTTPException(409,"The uploaded cover does not match the requested file.")
+    actual_type=str(uploaded.get("ContentType","")).lower()
+    if actual_type and actual_type!=content_type:raise HTTPException(409,"The uploaded cover has an unexpected content type.")
+    previous=event.cover_object_key;event.cover_object_key=payload.object_key;event.cover_content_type=content_type;db.commit()
+    if previous and previous!=payload.object_key:
+        try:delete_objects([previous])
+        except Exception:pass
+    return {"status":"ready","cover_url":f"/events/{event.id}/cover"}
+@app.delete("/api/events/{event_id}/cover")
+def remove_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:raise HTTPException(401)
+    event=event_for_owner(db,user,event_id);previous=event.cover_object_key;event.cover_object_key=None;event.cover_content_type=None;db.commit()
+    if previous:delete_objects([previous])
+    return {"status":"removed"}
+@app.get("/events/{event_id}/cover")
+def owner_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
+    user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id)
+    if not event.cover_object_key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(event.cover_object_key),302)
+
+# Media/gallery routes
 
 def owned_media(db,user,media_id):
     media=db.scalar(select(Media).join(Event).where(Media.id==media_id,Event.owner_id==user.id,Media.status=="uploaded"))
@@ -245,6 +289,11 @@ def guest_event(slug:str,request:Request,db:Session=Depends(get_db)):
     if event.status=="live" and event.guest_gallery_enabled:
         gallery=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc()).limit(60)).all()
     return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"gallery":gallery,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":settings.max_video_upload_mb})
+@app.get("/e/{slug}/cover")
+def guest_cover(slug:str,db:Session=Depends(get_db)):
+    event=db.scalar(select(Event).where(Event.slug==slug))
+    if event is None or not event.cover_object_key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(event.cover_object_key),302)
 @app.get("/e/{slug}/media/{media_id}/preview")
 def guest_media_preview(slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
     event=live_event_by_slug(db,slug)
