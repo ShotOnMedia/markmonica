@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import app, validate_upload
+from app.services.packages import get_package, package_metadata
 
 
 def test_health_endpoint():
@@ -42,3 +43,17 @@ def test_upload_validation_rejects_empty_file():
     with pytest.raises(HTTPException) as exc_info:
         validate_upload("image/jpeg", 0)
     assert exc_info.value.status_code == 400
+
+
+def test_default_package_is_billing_neutral_and_resolvable():
+    package = get_package("free")
+    assert package.code == "free"
+    assert package.max_events == 3
+    assert package.guest_gallery is True
+    assert package.archive_downloads is True
+
+
+def test_unknown_package_falls_back_to_default():
+    metadata = package_metadata("not-a-real-package")
+    assert metadata["code"] == "free"
+    assert metadata["limits"]["max_media_per_event"] == 250

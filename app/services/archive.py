@@ -1,4 +1,5 @@
 import json
+from datetime import timedelta
 from pathlib import Path
 import tempfile
 import uuid
@@ -8,7 +9,8 @@ from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models import ArchiveJob, Media, utcnow
-from app.services.storage import download_object, upload_object
+from app.services.storage import delete_objects, download_object, upload_object
+from app.settings import settings
 
 
 def _unique_name(name: str, used: set[str]) -> str:
@@ -64,3 +66,32 @@ def process_next_archive() -> bool:
         return False
     build_archive(job_id)
     return True
+
+
+def cleanup_expired_archives() -> int:
+    """Delete generated ZIP objects after their retention window while keeping job history."""
+    retention_hours = max(1, settings.archive_retention_hours)
+    cutoff = utcnow() - timedelta(hours=retention_hours)
+    with SessionLocal() as db:
+        jobs = db.scalars(
+            select(ArchiveJob)
+            .where(
+                ArchiveJob.status == "ready",
+                ArchiveJob.completed_at.is_not(None),
+                ArchiveJob.completed_at < cutoff,
+                ArchiveJob.object_key.is_not(None),
+            )
+            .order_by(ArchiveJob.completed_at.asc())
+            .limit(100)
+        ).all()
+        cleaned = 0
+        for job in jobs:
+            # Only mark the DB record expired after storage confirms deletion. If
+            # storage is unavailable the ready job remains intact for a later retry.
+            delete_objects([job.object_key])
+            job.object_key = None
+            job.status = "expired"
+            cleaned += 1
+        if cleaned:
+            db.commit()
+        return cleaned

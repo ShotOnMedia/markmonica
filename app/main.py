@@ -150,7 +150,7 @@ def logout(request:Request,db:Session=Depends(get_db)):
 def dashboard(request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
-    events=db.scalars(select(Event).where(Event.owner_id==user.id).order_by(Event.created_at.desc())).all();return templates.TemplateResponse(request=request,name="dashboard.html",context={"user":user,"events":events,"error":None})
+    events=db.scalars(select(Event).where(Event.owner_id==user.id).order_by(Event.created_at.desc())).all();return templates.TemplateResponse(request=request,name="dashboard.html",context={"user":user,"events":events,"today":date.today(),"error":None})
 @app.post("/events")
 def create_event(request:Request,title:str=Form(...),event_date:str=Form(""),db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
@@ -203,119 +203,114 @@ def confirm_cover(event_id:uuid.UUID,payload:CoverConfirmRequest,request:Request
 def remove_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,event_id);previous=event.cover_object_key;event.cover_object_key=None;event.cover_content_type=None;db.commit()
-    if previous:delete_objects([previous])
-    return {"status":"removed"}
+    event=event_for_owner(db,user,event_id);key=event.cover_object_key
+    if key:
+        try:delete_objects([key])
+        except Exception as exc:raise HTTPException(502,"Could not remove the cover photo from storage.") from exc
+    event.cover_object_key=None;event.cover_content_type=None;db.commit();return {"status":"removed"}
 @app.get("/events/{event_id}/cover")
-def owner_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
+def host_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
-    if user is None:return RedirectResponse("/login",303)
+    if user is None:raise HTTPException(401)
     event=event_for_owner(db,user,event_id)
     if not event.cover_object_key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(event.cover_object_key),302)
-
-def owned_media(db,user,media_id):
-    media=db.scalar(select(Media).join(Event).where(Media.id==media_id,Event.owner_id==user.id,Media.status=="uploaded"))
+@app.get("/e/{event_slug}/cover")
+def guest_cover(event_slug:str,db:Session=Depends(get_db)):
+    event=live_event_by_slug(db,event_slug)
+    if not event.cover_object_key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(event.cover_object_key),302)
+@app.get("/e/{event_slug}",response_class=HTMLResponse)
+def guest_event(event_slug:str,request:Request,db:Session=Depends(get_db)):
+    event=live_event_by_slug(db,event_slug);guest_media=[]
+    if event.guest_gallery_enabled:guest_media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc())).all()
+    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"guest_media":guest_media})
+@app.post("/api/events/{event_slug}/uploads")
+def initiate_upload(event_slug:str,payload:UploadRequest,request:Request,db:Session=Depends(get_db)):
+    enforce_guest_upload_rate_limit(request,event_slug);event=live_event_by_slug(db,event_slug);content_type=payload.content_type.lower().strip();validate_upload(content_type,payload.size_bytes);filename=safe_filename(payload.filename);object_key=f"events/{event.id}/originals/{uuid.uuid4().hex}-{filename}";media=Media(event_id=event.id,object_key=object_key,original_filename=filename,content_type=content_type,size_bytes=payload.size_bytes,uploader_name=(payload.guest_name or "").strip()[:160] or None,status="pending",processing_status="pending");db.add(media);db.commit();db.refresh(media);return {"media_id":str(media.id),"object_key":object_key,"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type,"max_bytes":settings.max_video_upload_mb*1024*1024 if content_type in ALLOWED_VIDEO_TYPES else settings.max_image_upload_mb*1024*1024}
+@app.post("/api/events/{event_slug}/uploads/confirm")
+def confirm_upload(event_slug:str,payload:UploadConfirmRequest,request:Request,db:Session=Depends(get_db)):
+    event=live_event_by_slug(db,event_slug);media=db.scalar(select(Media).where(Media.id==payload.media_id,Media.event_id==event.id))
     if media is None:raise HTTPException(404)
-    return media
-@app.get("/media/{media_id}")
-def view_media(media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
+    if media.status=="uploaded":return {"status":"uploaded","media_id":str(media.id),"processing_status":media.processing_status}
+    try:uploaded=head_object(media.object_key)
+    except ClientError as exc:raise HTTPException(409,"The uploaded file could not be verified yet.") from exc
+    if int(uploaded.get("ContentLength",0))!=media.size_bytes:raise HTTPException(409,"The uploaded file does not match the requested file.")
+    actual_type=str(uploaded.get("ContentType","")).lower()
+    if actual_type and actual_type!=media.content_type.lower():raise HTTPException(409,"The uploaded file has an unexpected content type.")
+    media.status="uploaded";media.processing_status="pending";db.commit();enqueue_media_processing(media.id);return {"status":"uploaded","media_id":str(media.id),"processing_status":media.processing_status}
+@app.get("/events/{event_id}/media/{media_id}/preview")
+def host_media_preview(event_id:uuid.UUID,media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
-    if user is None:return RedirectResponse("/login",303)
-    return RedirectResponse(create_presigned_download(owned_media(db,user,media_id).object_key),302)
-@app.get("/media/{media_id}/preview")
-def preview_media(media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
+    if user is None:raise HTTPException(401)
+    event=event_for_owner(db,user,event_id);media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded"))
+    if media is None:raise HTTPException(404)
+    key=media.preview_object_key or media.poster_object_key or media.object_key;return RedirectResponse(create_presigned_download(key),302)
+@app.get("/events/{event_id}/media/{media_id}/play")
+def host_media_play(event_id:uuid.UUID,media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
-    if user is None:return RedirectResponse("/login",303)
-    media=owned_media(db,user,media_id);return RedirectResponse(create_presigned_download(media.preview_object_key or media.object_key),302)
-@app.get("/media/{media_id}/play")
-def play_media(media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
+    if user is None:raise HTTPException(401)
+    event=event_for_owner(db,user,event_id);media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded"))
+    if media is None:raise HTTPException(404)
+    key=media.processed_object_key or media.object_key;return RedirectResponse(create_presigned_download(key),302)
+@app.get("/e/{event_slug}/media/{media_id}/preview")
+def guest_media_preview(event_slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
+    event=live_event_by_slug(db,event_slug)
+    if not event.guest_gallery_enabled:raise HTTPException(404)
+    media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready"))
+    if media is None:raise HTTPException(404)
+    key=media.preview_object_key or media.poster_object_key
+    if not key and media.content_type.startswith("image/"):key=media.object_key
+    if not key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(key),302)
+@app.get("/e/{event_slug}/media/{media_id}/play")
+def guest_media_play(event_slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
+    event=live_event_by_slug(db,event_slug)
+    if not event.guest_gallery_enabled:raise HTTPException(404)
+    media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready"))
+    if media is None or not media.content_type.startswith("video/") or not media.processed_object_key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(media.processed_object_key),302)
+@app.get("/events/{event_id}/media/{media_id}/download")
+def host_media_download(event_id:uuid.UUID,media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
-    if user is None:return RedirectResponse("/login",303)
-    media=owned_media(db,user,media_id);return RedirectResponse(create_presigned_download(media.processed_object_key or media.object_key),302)
-@app.get("/media/{media_id}/poster")
-def poster_media(media_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
-    user=current_user(request,db)
-    if user is None:return RedirectResponse("/login",303)
-    media=owned_media(db,user,media_id)
-    if not media.poster_object_key:raise HTTPException(404)
-    return RedirectResponse(create_presigned_download(media.poster_object_key),302)
+    if user is None:raise HTTPException(401)
+    event=event_for_owner(db,user,event_id);media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded"))
+    if media is None:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(media.object_key),302,headers={"Content-Disposition":f'attachment; filename="{safe_filename(media.original_filename)}"'})
 @app.post("/api/events/{event_id}/media/delete")
 def delete_media(event_id:uuid.UUID,payload:MediaIdsRequest,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,str(event_id));ids=list(dict.fromkeys(payload.media_ids))
-    if not ids:raise HTTPException(400,"No media selected.")
-    items=db.scalars(select(Media).where(Media.event_id==event.id,Media.id.in_(ids),Media.status=="uploaded")).all()
-    if len(items)!=len(ids):raise HTTPException(404,"One or more selected media items were not found.")
+    event=event_for_owner(db,user,event_id);ids=list(dict.fromkeys(payload.media_ids))
+    if not ids:raise HTTPException(400,"Choose at least one item to delete.")
+    media_items=db.scalars(select(Media).where(Media.event_id==event.id,Media.id.in_(ids))).all()
+    if len(media_items)!=len(ids):raise HTTPException(404,"One or more selected items could not be found.")
     keys=[]
-    for item in items:keys.extend([item.object_key,item.preview_object_key,item.processed_object_key,item.poster_object_key])
-    delete_objects(keys)
-    for item in items:db.delete(item)
-    db.commit();return {"status":"deleted","count":len(items)}
+    for item in media_items:keys.extend(k for k in [item.object_key,item.preview_object_key,item.poster_object_key,item.processed_object_key] if k)
+    try:delete_objects(keys)
+    except Exception as exc:raise HTTPException(502,"Could not delete all selected files from storage.") from exc
+    for item in media_items:db.delete(item)
+    db.commit();return {"status":"deleted","deleted":len(media_items)}
 @app.post("/api/events/{event_id}/archives")
-def create_archive(event_id:uuid.UUID,payload:ArchiveRequest,request:Request,db:Session=Depends(get_db)):
+def create_archive_job(event_id:uuid.UUID,payload:ArchiveRequest,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,str(event_id));ids=list(dict.fromkeys(payload.media_ids or []))
-    if ids:
-        found=db.scalars(select(Media.id).where(Media.event_id==event.id,Media.id.in_(ids),Media.status=="uploaded")).all()
-        if len(found)!=len(ids):raise HTTPException(404,"One or more selected media items were not found.")
-    elif db.scalar(select(Media.id).where(Media.event_id==event.id,Media.status=="uploaded").limit(1)) is None:raise HTTPException(400,"This event has no uploaded media.")
-    suffix="selected" if ids else "all";job=ArchiveJob(event_id=event.id,requested_media_ids=json.dumps([str(i) for i in ids]) if ids else None,status="queued",filename=f"{event.slug}-{suffix}-memories.zip");db.add(job);db.commit();db.refresh(job);enqueue({"type":"build_archive","job_id":str(job.id)});return {"job_id":str(job.id),"status":"queued"}
+    event=event_for_owner(db,user,event_id);requested=None
+    if payload.media_ids:
+        requested=list(dict.fromkeys(payload.media_ids));found=db.scalars(select(Media.id).where(Media.event_id==event.id,Media.status=="uploaded",Media.id.in_(requested))).all()
+        if len(found)!=len(requested):raise HTTPException(404,"One or more selected items could not be found.")
+    job=ArchiveJob(event_id=event.id,requested_media_ids=json.dumps([str(x) for x in requested]) if requested else None,status="queued",filename=f"{event.slug}-memories.zip");db.add(job);db.commit();db.refresh(job);enqueue({"type":"build_archive","archive_job_id":str(job.id)});return {"job_id":str(job.id),"status":job.status}
 @app.get("/api/events/{event_id}/archives/{job_id}")
 def archive_status(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,str(event_id));job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id))
-    if not job:raise HTTPException(404)
+    event=event_for_owner(db,user,event_id);job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id))
+    if job is None:raise HTTPException(404)
     return {"job_id":str(job.id),"status":job.status,"error":job.error,"download_url":f"/events/{event.id}/archives/{job.id}/download" if job.status=="ready" else None}
 @app.get("/events/{event_id}/archives/{job_id}/download")
-def download_archive(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
+def archive_download(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
-    if user is None:return RedirectResponse("/login",303)
-    event=event_for_owner(db,user,str(event_id));job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id,ArchiveJob.status=="ready"))
-    if not job or not job.object_key:raise HTTPException(404)
-    return RedirectResponse(create_presigned_download(job.object_key),302,headers={"Content-Disposition":f'attachment; filename="{job.filename}"'})
-
-@app.get("/e/{slug}",response_class=HTMLResponse)
-def guest_event(slug:str,request:Request,db:Session=Depends(get_db)):
-    event=db.scalar(select(Event).where(Event.slug==slug))
-    if event is None:raise HTTPException(404)
-    gallery=[]
-    if event.status=="live" and event.guest_gallery_enabled:
-        gallery=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc()).limit(60)).all()
-    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"gallery":gallery,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":settings.max_video_upload_mb})
-@app.get("/e/{slug}/cover")
-def guest_cover(slug:str,db:Session=Depends(get_db)):
-    event=db.scalar(select(Event).where(Event.slug==slug))
-    if event is None or not event.cover_object_key:raise HTTPException(404)
-    return RedirectResponse(create_presigned_download(event.cover_object_key),302)
-def guest_gallery_media(db,slug,media_id):
-    event=live_event_by_slug(db,slug)
-    if not event.guest_gallery_enabled:raise HTTPException(404)
-    media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready"))
-    if not media:raise HTTPException(404)
-    return media
-@app.get("/e/{slug}/media/{media_id}/preview")
-def guest_media_preview(slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
-    media=guest_gallery_media(db,slug,media_id);key=media.preview_object_key or media.poster_object_key
-    if not key:raise HTTPException(404)
-    return RedirectResponse(create_presigned_download(key),302)
-@app.get("/e/{slug}/media/{media_id}/play")
-def guest_media_play(slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
-    media=guest_gallery_media(db,slug,media_id)
-    if not media.content_type.startswith("video/") or not media.processed_object_key:raise HTTPException(404)
-    return RedirectResponse(create_presigned_download(media.processed_object_key),302)
-@app.post("/api/events/{slug}/uploads")
-def initiate_upload(slug:str,payload:UploadRequest,request:Request,db:Session=Depends(get_db)):
-    enforce_guest_upload_rate_limit(request,slug);event=live_event_by_slug(db,slug);content_type=payload.content_type.lower().strip();validate_upload(content_type,payload.size_bytes);filename=safe_filename(payload.filename);object_key=f"events/{event.id}/{uuid.uuid4().hex}/{filename}";media=Media(event_id=event.id,object_key=object_key,original_filename=filename,content_type=content_type,size_bytes=payload.size_bytes,uploader_name=(payload.guest_name or "").strip()[:160] or None,status="uploading");db.add(media);db.commit();db.refresh(media);return {"media_id":str(media.id),"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type,"expires_in":settings.upload_url_expiry_seconds}
-@app.post("/api/events/{slug}/uploads/confirm")
-def confirm_upload(slug:str,payload:UploadConfirmRequest,db:Session=Depends(get_db)):
-    event=live_event_by_slug(db,slug);media=db.scalar(select(Media).where(Media.id==payload.media_id,Media.event_id==event.id,Media.status=="uploading"))
-    if media is None:raise HTTPException(404,"Upload session not found.")
-    try:uploaded=head_object(media.object_key)
-    except ClientError as exc:raise HTTPException(409,"The uploaded object could not be verified yet.") from exc
-    actual_size=int(uploaded.get("ContentLength",0));actual_type=str(uploaded.get("ContentType","")).lower()
-    if actual_size<=0 or actual_size!=media.size_bytes or (actual_type and actual_type!=media.content_type.lower()):raise HTTPException(409,"The uploaded object does not match the requested file.")
-    media.status="uploaded";media.processing_status="pending";db.commit();enqueue_media_processing(media.id);return {"status":"uploaded","media_id":str(media.id),"processing_status":"pending"}
+    if user is None:raise HTTPException(401)
+    event=event_for_owner(db,user,event_id);job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id,ArchiveJob.status=="ready"))
+    if job is None or not job.object_key:raise HTTPException(404)
+    return RedirectResponse(create_presigned_download(job.object_key),302,headers={"Content-Disposition":f'attachment; filename="{safe_filename(job.filename)}"'})

@@ -6,7 +6,7 @@ import time
 from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from app.services.archive import build_archive, process_next_archive
+from app.services.archive import build_archive, cleanup_expired_archives, process_next_archive
 from app.services.media_processing import process_media, process_next_pending
 from app.services.upload_cleanup import cleanup_stale_uploads
 from app.settings import settings
@@ -35,6 +35,12 @@ def run_cleanup() -> None:
     try: cleanup_stale_uploads()
     except Exception: logger.exception("Stale upload cleanup failed")
 
+def run_archive_cleanup() -> None:
+    try:
+        cleaned = cleanup_expired_archives()
+        if cleaned: logger.info("Expired %s generated archive(s)", cleaned)
+    except Exception: logger.exception("Archive lifecycle cleanup failed")
+
 def run_pending_media() -> None:
     try:
         for _ in range(3):
@@ -50,8 +56,8 @@ def run_pending_archives() -> None:
 def main() -> None:
     signal.signal(signal.SIGTERM, stop_worker); signal.signal(signal.SIGINT, stop_worker)
     redis = Redis.from_url(settings.redis_url, decode_responses=True); logger.info("MarkMonica worker started; queue=%s", settings.worker_queue)
-    run_cleanup(); run_pending_media(); run_pending_archives()
-    next_cleanup = time.monotonic() + settings.stale_upload_cleanup_interval_seconds; next_media_poll = time.monotonic() + 10; next_archive_poll = time.monotonic() + 10
+    run_cleanup(); run_archive_cleanup(); run_pending_media(); run_pending_archives()
+    next_cleanup = time.monotonic() + settings.stale_upload_cleanup_interval_seconds; next_archive_cleanup = time.monotonic() + settings.archive_cleanup_interval_seconds; next_media_poll = time.monotonic() + 10; next_archive_poll = time.monotonic() + 10
     while running:
         try:
             item = redis.blpop(settings.worker_queue, timeout=5)
@@ -62,6 +68,7 @@ def main() -> None:
         if time.monotonic() >= next_media_poll: run_pending_media(); next_media_poll = time.monotonic() + 10
         if time.monotonic() >= next_archive_poll: run_pending_archives(); next_archive_poll = time.monotonic() + 10
         if time.monotonic() >= next_cleanup: run_cleanup(); next_cleanup = time.monotonic() + settings.stale_upload_cleanup_interval_seconds
+        if time.monotonic() >= next_archive_cleanup: run_archive_cleanup(); next_archive_cleanup = time.monotonic() + settings.archive_cleanup_interval_seconds
     logger.info("MarkMonica worker stopped")
 
 if __name__ == "__main__": main()
