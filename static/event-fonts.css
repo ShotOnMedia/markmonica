@@ -1,0 +1,38 @@
+:root{--event-display-font:inherit;--preview-display-font:inherit}
+body[data-display-font="playfair"]{--event-display-font:"Playfair Display",Georgia,"Times New Roman",serif}
+body[data-display-font="cormorant"]{--event-display-font:"Cormorant Garamond",Georgia,"Times New Roman",serif}
+body[data-display-font="dm-serif"]{--event-display-font:"DM Serif Display",Georgia,"Times New Roman",serif}
+body[data-display-font="great-vibes"]{--event-display-font:"Great Vibes",cursive}
+body[data-display-font="parisienne"]{--event-display-font:"Parisienne",cursive}
+body[data-display-font="dancing-script"]{--event-display-font:"Dancing Script",cursive}
+body[data-display-font="libre-baskerville"]{--event-display-font:"Libre Baskerville",Georgia,"Times New Roman",serif}
+body[data-display-font="montserrat"]{--event-display-font:"Montserrat",Arial,sans-serif}
+body[data-display-font="poppins"]{--event-display-font:"Poppins",Arial,sans-serif}
+body[data-display-font]:not([data-display-font="default"]) .guest-event-intro h1,
+body[data-display-font]:not([data-display-font="default"]) .guest-gallery-heading h2{font-family:var(--event-display-font);font-style:normal}
+body[data-display-font="great-vibes"] .guest-event-intro h1,
+body[data-display-font="great-vibes"] .guest-gallery-heading h2,
+body[data-display-font="parisienne"] .guest-event-intro h1,
+body[data-display-font="parisienne"] .guest-gallery-heading h2,
+body[data-display-font="dancing-script"] .guest-event-intro h1,
+body[data-display-font="dancing-script"] .guest-gallery-heading h2,
+body[data-display-font="dm-serif"] .guest-event-intro h1,
+body[data-display-font="dm-serif"] .guest-gallery-heading h2{font-weight:400;letter-spacing:0}
+.mini-phone[data-display-font="playfair"]{--preview-display-font:"Playfair Display",Georgia,"Times New Roman",serif}
+.mini-phone[data-display-font="cormorant"]{--preview-display-font:"Cormorant Garamond",Georgia,"Times New Roman",serif}
+.mini-phone[data-display-font="dm-serif"]{--preview-display-font:"DM Serif Display",Georgia,"Times New Roman",serif}
+.mini-phone[data-display-font="great-vibes"]{--preview-display-font:"Great Vibes",cursive}
+.mini-phone[data-display-font="parisienne"]{--preview-display-font:"Parisienne",cursive}
+.mini-phone[data-display-font="dancing-script"]{--preview-display-font:"Dancing Script",cursive}
+.mini-phone[data-display-font="libre-baskerville"]{--preview-display-font:"Libre Baskerville",Georgia,"Times New Roman",serif}
+.mini-phone[data-display-font="montserrat"]{--preview-display-font:"Montserrat",Arial,sans-serif}
+.mini-phone[data-display-font="poppins"]{--preview-display-font:"Poppins",Arial,sans-serif}
+.mini-phone[data-display-font]:not([data-display-font="default"]) .mini-event strong{font-family:var(--preview-display-font);font-style:normal}
+.mini-phone[data-display-font="great-vibes"] .mini-event strong,
+.mini-phone[data-display-font="parisienne"] .mini-event strong,
+.mini-phone[data-display-font="dancing-script"] .mini-event strong,
+.mini-phone[data-display-font="dm-serif"] .mini-event strong{font-weight:400;letter-spacing:0}
+.guest-font-field{display:grid;gap:6px}
+.guest-font-field>span{font-size:.86rem;font-weight:700}
+.guest-font-field small{color:#8c837b;font-size:.7rem;line-height:1.4}
+.guest-font-field select{width:100%}
