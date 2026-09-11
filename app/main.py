@@ -30,6 +30,7 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates")); SESSION_COOK
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}; ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-m4v", "video/webm"}
 ALLOWED_COVER_TYPES={"image/jpeg","image/png","image/webp"}; MAX_COVER_BYTES=15*1024*1024
 ALLOWED_EVENT_THEMES={"classic","romantic","modern"}; DEFAULT_ACCENT_COLOR="#7c5cff"
+ALLOWED_GUEST_FONTS={"default","playfair","cormorant","dm-serif","great-vibes","parisienne","dancing-script","libre-baskerville","montserrat","poppins"}
 
 def origin_for(url):
     if not url: return None
@@ -52,7 +53,7 @@ app=FastAPI(title=settings.app_name,version=__version__,lifespan=lifespan); app.
 @app.middleware("http")
 async def security_headers(request,call_next):
     response=await call_next(request); storage=f" {STORAGE_ORIGIN}" if STORAGE_ORIGIN else ""
-    response.headers.setdefault("X-Content-Type-Options","nosniff"); response.headers.setdefault("X-Frame-Options","DENY"); response.headers.setdefault("Referrer-Policy","strict-origin-when-cross-origin"); response.headers.setdefault("Permissions-Policy","camera=(), microphone=(), geolocation=()"); response.headers.setdefault("Content-Security-Policy","default-src 'self'; "+f"img-src 'self' data:{storage}; "+f"media-src 'self'{storage}; "+f"connect-src 'self'{storage}; "+"style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+    response.headers.setdefault("X-Content-Type-Options","nosniff"); response.headers.setdefault("X-Frame-Options","DENY"); response.headers.setdefault("Referrer-Policy","strict-origin-when-cross-origin"); response.headers.setdefault("Permissions-Policy","camera=(), microphone=(), geolocation=()"); response.headers.setdefault("Content-Security-Policy","default-src 'self'; "+f"img-src 'self' data:{storage}; "+f"media-src 'self'{storage}; "+f"connect-src 'self'{storage}; "+"style-src 'self' https://fonts.googleapis.com; script-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
     if COOKIE_SECURE: response.headers.setdefault("Strict-Transport-Security","max-age=31536000; includeSubDomains")
     return response
 
@@ -166,13 +167,13 @@ def manage_event(event_id:str,request:Request,db:Session=Depends(get_db)):
     if user is None:return RedirectResponse("/login",303)
     event=event_for_owner(db,user,event_id);media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded").order_by(Media.created_at.desc())).all();return templates.TemplateResponse(request=request,name="event_manage.html",context={"user":user,"event":event,"guest_url":guest_url(event),"media":media})
 @app.post("/events/{event_id}")
-def update_event(event_id:str,request:Request,title:str=Form(...),event_date:str=Form(""),status:str=Form("draft"),welcome_message:str=Form(""),thank_you_message:str=Form(""),theme:str=Form("classic"),accent_color:str=Form(DEFAULT_ACCENT_COLOR),guest_gallery_enabled:str|None=Form(None),db:Session=Depends(get_db)):
+def update_event(event_id:str,request:Request,title:str=Form(...),event_date:str=Form(""),status:str=Form("draft"),welcome_message:str=Form(""),thank_you_message:str=Form(""),theme:str=Form("classic"),accent_color:str=Form(DEFAULT_ACCENT_COLOR),guest_font:str=Form("default"),guest_gallery_enabled:str|None=Form(None),db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
     event=event_for_owner(db,user,event_id);event.title=title.strip() or event.title
     try:event.event_date=date.fromisoformat(event_date) if event_date else None
     except ValueError:pass
-    event.status="live" if status=="live" else "draft";event.welcome_message=clean_message(welcome_message);event.thank_you_message=clean_message(thank_you_message);event.theme=theme if theme in ALLOWED_EVENT_THEMES else "classic";event.accent_color=clean_accent_color(accent_color);event.guest_gallery_enabled=guest_gallery_enabled is not None;db.commit();return RedirectResponse(f"/events/{event.id}",303)
+    event.status="live" if status=="live" else "draft";event.welcome_message=clean_message(welcome_message);event.thank_you_message=clean_message(thank_you_message);event.theme=theme if theme in ALLOWED_EVENT_THEMES else "classic";event.accent_color=clean_accent_color(accent_color);event.guest_font=guest_font if guest_font in ALLOWED_GUEST_FONTS else "default";event.guest_gallery_enabled=guest_gallery_enabled is not None;db.commit();return RedirectResponse(f"/events/{event.id}",303)
 @app.get("/events/{event_id}/qr.png")
 def event_qr(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
@@ -224,7 +225,7 @@ def guest_cover(event_slug:str,db:Session=Depends(get_db)):
 def guest_event(event_slug:str,request:Request,db:Session=Depends(get_db)):
     event=live_event_by_slug(db,event_slug);guest_media=[]
     if event.guest_gallery_enabled:guest_media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc())).all()
-    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"guest_media":guest_media})
+    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"guest_media":guest_media,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":settings.max_video_upload_mb})
 @app.post("/api/events/{event_slug}/uploads")
 def initiate_upload(event_slug:str,payload:UploadRequest,request:Request,db:Session=Depends(get_db)):
     enforce_guest_upload_rate_limit(request,event_slug);event=live_event_by_slug(db,event_slug);content_type=payload.content_type.lower().strip();validate_upload(content_type,payload.size_bytes);filename=safe_filename(payload.filename);object_key=f"events/{event.id}/originals/{uuid.uuid4().hex}-{filename}";media=Media(event_id=event.id,object_key=object_key,original_filename=filename,content_type=content_type,size_bytes=payload.size_bytes,uploader_name=(payload.guest_name or "").strip()[:160] or None,status="pending",processing_status="pending");db.add(media);db.commit();db.refresh(media);return {"media_id":str(media.id),"object_key":object_key,"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type,"max_bytes":settings.max_video_upload_mb*1024*1024 if content_type in ALLOWED_VIDEO_TYPES else settings.max_image_upload_mb*1024*1024}
