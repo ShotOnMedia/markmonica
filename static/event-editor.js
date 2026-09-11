@@ -6,6 +6,7 @@
   const accent = document.querySelector('[data-accent-picker]');
   const value = document.querySelector('[data-accent-value]');
   const themes = document.querySelectorAll('input[name="theme"]');
+  const guestFont = document.querySelector('[data-font-picker]');
   const input = document.querySelector('[data-cover-input]');
   const choose = document.querySelector('[data-cover-choose]');
   const remove = document.querySelector('[data-cover-remove]');
@@ -14,7 +15,8 @@
   const miniCover = document.querySelector('[data-mini-cover]');
   const updateAccent = () => { if (!accent) return; preview.style.setProperty('--preview-accent', accent.value); if (value) value.textContent = accent.value.toUpperCase(); };
   const updateTheme = () => { const selected = document.querySelector('input[name="theme"]:checked'); preview.dataset.theme = selected ? selected.value : 'classic'; };
-  accent?.addEventListener('input', updateAccent); themes.forEach(i => i.addEventListener('change', updateTheme)); updateAccent(); updateTheme();
+  const updateGuestFont = () => { preview.dataset.displayFont = guestFont?.value || 'default'; };
+  accent?.addEventListener('input', updateAccent); themes.forEach(i => i.addEventListener('change', updateTheme)); guestFont?.addEventListener('change', updateGuestFont); updateAccent(); updateTheme(); updateGuestFont();
   choose?.addEventListener('click', () => input?.click());
   input?.addEventListener('change', async () => { const file=input.files?.[0]; input.value=''; if (!file) return; await uploadCover(file); });
   remove?.addEventListener('click', async () => {
