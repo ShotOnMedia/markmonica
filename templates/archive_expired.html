@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Download expired · Memories' Events</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="/static/brand.css">
+</head>
+<body>
+<main class="shell">
+    <section class="card auth-card">
+        <a class="brand brand-logo" href="/dashboard" aria-label="Memories' Events dashboard"><img src="/static/memories-events-logo.svg" alt="Memories' Events"></a>
+        <p class="eyebrow">Event download</p>
+        <h1>This download has expired</h1>
+        <p class="tagline">Generated ZIP files are kept temporarily to save storage. Your original photos and videos are still safe in the event gallery.</p>
+        <a class="button-link" href="/events/{{ event.id }}">Back to {{ event.title }}</a>
+        <p class="muted">Use <strong>Download all</strong> or select memories in the gallery to generate a fresh ZIP.</p>
+    </section>
+</main>
+</body>
+</html>
