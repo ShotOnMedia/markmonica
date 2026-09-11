@@ -45,6 +45,7 @@ class Event(Base):
     thank_you_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     theme: Mapped[str] = mapped_column(String(32), default="classic", nullable=False)
     accent_color: Mapped[str] = mapped_column(String(7), default="#7c5cff", nullable=False)
+    guest_font: Mapped[str] = mapped_column(String(64), default="default", nullable=False)
     guest_gallery_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     cover_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     cover_content_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
