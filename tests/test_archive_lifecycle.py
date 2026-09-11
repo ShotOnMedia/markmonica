@@ -24,3 +24,21 @@ def test_archive_worker_accepts_web_queue_key():
 def test_archive_download_helper_supports_response_filename():
     storage = Path("app/services/storage.py").read_text()
     assert "ResponseContentDisposition" in storage
+
+
+def test_archive_routes_expose_expiry_and_friendly_expired_page():
+    app = Path("app/main.py").read_text()
+    assert '"expires_at":expires_at.isoformat() if expires_at else None' in app
+    assert '"expires_in_seconds":expires_in_seconds' in app
+    assert 'name="archive_expired.html"' in app
+    assert 'status_code=410' in app
+    assert 'response_filename=filename' in app
+    template = Path("templates/archive_expired.html").read_text()
+    assert "This download has expired" in template
+    assert "Your original photos and videos are still safe" in template
+
+
+def test_gallery_reports_archive_retention_to_host():
+    gallery = Path("static/gallery.js").read_text()
+    assert "available ${expiryLabel(job.expires_in_seconds)}" in gallery
+    assert "job.status==='expired'" in gallery
