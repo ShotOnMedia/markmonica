@@ -26,3 +26,21 @@ def test_host_gallery_uses_event_scoped_media_routes():
     assert 'src="/media/{{ item.id }}' not in template
     assert 'poster="/media/{{ item.id }}' not in template
     assert 'data-original-url="/media/{{ item.id }}"' not in template
+
+
+def test_guest_font_customization_is_wired_into_host_and_guest_templates():
+    manage = Path("templates/event_manage.html").read_text()
+    guest = Path("templates/guest_event.html").read_text()
+    css = Path("static/event-fonts.css")
+    assert 'name="guest_font"' in manage
+    assert 'data-font-picker' in manage
+    assert 'value="great-vibes"' in manage
+    assert 'data-display-font="{{ event.guest_font or \'default\' }}"' in manage
+    assert 'data-display-font="{{ event.guest_font or \'default\' }}"' in guest
+    assert 'fonts.googleapis.com/css2' in manage
+    assert 'fonts.googleapis.com/css2' in guest
+    assert css.exists()
+    styles = css.read_text()
+    assert 'Great Vibes' in styles
+    assert 'Playfair Display' in styles
+    assert '.guest-event-intro h1' in styles
