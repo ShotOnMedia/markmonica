@@ -12,7 +12,7 @@
 <body class="home-body">
 <div class="home-page">
     <header class="home-nav">
-        <a class="home-logo" href="/">Memories' Events</a>
+        <a class="home-logo" href="/" aria-label="Memories' Events home"><img src="/static/memories-events-logo.svg" alt="Memories' Events"></a>
         <nav class="home-nav-actions" aria-label="Account">
             <a class="home-nav-link" href="/login">Sign in</a>
             <a class="home-nav-cta" href="/register">Create an event</a>
@@ -58,9 +58,7 @@
                     </div>
                 </div>
                 <div class="demo-card demo-qr">
-                    <div class="qr-fake" aria-hidden="true">
-                        {% for i in range(49) %}<i></i>{% endfor %}
-                    </div>
+                    <div class="qr-fake" aria-hidden="true">{% for i in range(49) %}<i></i>{% endfor %}</div>
                     <strong>Scan to share</strong>
                 </div>
             </div>
@@ -94,7 +92,7 @@
         <section class="home-section home-final"><div class="home-final-card"><h2>Your guests already have the camera. Give them one easy place to share.</h2><p>Create your event in a few minutes and have your QR code ready before the first guest arrives.</p><a class="home-primary" href="/register">Create your first event →</a></div></section>
     </main>
 
-    <footer class="home-footer"><strong>Memories' Events</strong><span>Event memories, made simple.</span><span class="home-version">v{{ version }}</span></footer>
+    <footer class="home-footer"><a class="home-footer-logo" href="/" aria-label="Memories' Events home"><img src="/static/memories-events-logo.svg" alt=""></a><span>Event memories, made simple.</span><span class="home-version">v{{ version }}</span></footer>
 </div>
 </body>
 </html>
