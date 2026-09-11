@@ -20,8 +20,9 @@ from sqlalchemy.orm import Session
 
 from app import __version__
 from app.db import engine, get_db
-from app.models import ArchiveJob, Event, Media, User, UserSession
+from app.models import ArchiveJob, Event, Media, User, UserSession, utcnow
 from app.security import hash_password, new_session, user_from_session_token, verify_password
+from app.services.archive import archive_expires_at, archive_is_expired
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
 
@@ -307,11 +308,15 @@ def archive_status(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Sessio
     if user is None:raise HTTPException(401)
     event=event_for_owner(db,user,event_id);job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id))
     if job is None:raise HTTPException(404)
-    return {"job_id":str(job.id),"status":job.status,"error":job.error,"download_url":f"/events/{event.id}/archives/{job.id}/download" if job.status=="ready" else None}
+    expired=job.status=="expired" or (job.status=="ready" and archive_is_expired(job.completed_at));status="expired" if expired else job.status;expires_at=archive_expires_at(job.completed_at);expires_in_seconds=max(0,int((expires_at-utcnow()).total_seconds())) if expires_at and not expired else 0
+    return {"job_id":str(job.id),"status":status,"error":job.error,"message":"This download has expired. Generate a new download from the event gallery." if expired else None,"expires_at":expires_at.isoformat() if expires_at else None,"expires_in_seconds":expires_in_seconds,"download_url":f"/events/{event.id}/archives/{job.id}/download" if status=="ready" and job.object_key else None}
 @app.get("/events/{event_id}/archives/{job_id}/download")
 def archive_download(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,event_id);job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id,ArchiveJob.status=="ready"))
-    if job is None or not job.object_key:raise HTTPException(404)
-    return RedirectResponse(create_presigned_download(job.object_key),302,headers={"Content-Disposition":f'attachment; filename="{safe_filename(job.filename)}"'})
+    event=event_for_owner(db,user,event_id);job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id))
+    if job is None:raise HTTPException(404)
+    if job.status=="expired" or (job.status=="ready" and archive_is_expired(job.completed_at)):
+        return templates.TemplateResponse(request=request,name="archive_expired.html",context={"event":event,"job":job},status_code=410)
+    if job.status!="ready" or not job.object_key:raise HTTPException(409,"This download is not ready. Generate a new archive if the previous attempt failed.")
+    filename=safe_filename(job.filename);return RedirectResponse(create_presigned_download(job.object_key,response_filename=filename),302)
