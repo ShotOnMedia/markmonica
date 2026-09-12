@@ -1,0 +1,9 @@
+{% extends "admin/base.html" %}
+{% block title %}Events{% endblock %}{% block heading %}Events{% endblock %}
+{% block content %}
+<section class="panel"><form class="filters" method="get"><input name="q" value="{{ q }}" placeholder="Search event, slug or owner"><select name="status"><option value="">All statuses</option><option value="live" {{ 'selected' if status == 'live' else '' }}>Live</option><option value="draft" {{ 'selected' if status == 'draft' else '' }}>Draft</option></select><button>Filter</button>{% if q or status %}<a href="/admin/events">Clear</a>{% endif %}</form></section>
+<section class="panel table-panel"><div class="panel-head"><div><span class="eyebrow">Celebrations</span><h2>{{ events|length }} event{{ '' if events|length == 1 else 's' }}</h2></div></div>
+<div class="table-wrap"><table><thead><tr><th>Event</th><th>Owner</th><th>Status</th><th>Package</th><th>Memories</th><th>Storage</th><th>Date</th></tr></thead><tbody>
+{% for item in events %}{% set ms = media_stats.get(item.id, (0, 0)) %}<tr><td><strong>{{ item.title }}</strong><span>{{ item.slug }}</span></td><td><a href="/admin/users/{{ item.owner.id }}">{{ item.owner.email }}</a></td><td><span class="badge {{ 'ok' if item.status == 'live' else 'muted' }}">{{ item.status|title }}</span></td><td>{{ item.package_code|title }}</td><td>{{ ms[0] }}</td><td>{{ fmt_bytes(ms[1]) }}</td><td>{{ item.event_date.strftime('%d %b %Y') if item.event_date else 'Not set' }}</td></tr>{% else %}<tr><td colspan="7" class="empty">No matching events.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}
