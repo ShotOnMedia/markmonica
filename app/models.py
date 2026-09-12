@@ -38,7 +38,7 @@ class Event(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft", index=True, nullable=False)
-    package_code: Mapped[str] = mapped_column(String(64), default="free", index=True, nullable=False)
+    package_code: Mapped[str] = mapped_column(String(64), default="starter", index=True, nullable=False)
     package_assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     gallery_visibility: Mapped[str] = mapped_column(String(32), default="approved", nullable=False)
     welcome_message: Mapped[str | None] = mapped_column(Text, nullable=True)
