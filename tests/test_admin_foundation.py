@@ -9,11 +9,12 @@ from app.models import User
 
 def test_admin_routes_are_registered():
     paths = {route.path for route in admin_router.routes if hasattr(route, "path")}
-    assert "/admin" in paths
-    assert "/admin/" in paths
-    assert "/admin/users" in paths
-    assert "/admin/users/{user_id}" in paths
-    assert "/admin/events" in paths
+    for path in (
+        "/admin", "/admin/", "/admin/users", "/admin/users/{user_id}",
+        "/admin/users/{user_id}/status", "/admin/events", "/admin/events/{event_id}",
+        "/admin/events/{event_id}/status", "/admin/events/{event_id}/package", "/admin/media",
+    ):
+        assert path in paths
 
 
 def test_anonymous_admin_access_is_forbidden():
@@ -30,15 +31,20 @@ def test_user_model_has_explicit_admin_flag():
 
 def test_admin_templates_and_styles_exist():
     for path in (
-        "templates/admin/base.html",
-        "templates/admin/dashboard.html",
-        "templates/admin/users.html",
-        "templates/admin/user_detail.html",
-        "templates/admin/events.html",
-        "static/admin.css",
+        "templates/admin/base.html", "templates/admin/dashboard.html", "templates/admin/users.html",
+        "templates/admin/user_detail.html", "templates/admin/events.html", "templates/admin/event_detail.html",
+        "templates/admin/media.html", "static/admin.css",
     ):
         assert Path(path).exists()
     shell = Path("templates/admin/base.html").read_text()
     assert "Platform Admin" in shell
     assert "/admin/users" in shell
     assert "/admin/events" in shell
+    assert "/admin/media" in shell
+
+
+def test_admin_mutation_routes_are_post_only():
+    methods = {route.path: route.methods for route in admin_router.routes if hasattr(route, "methods")}
+    assert methods["/admin/users/{user_id}/status"] == {"POST"}
+    assert methods["/admin/events/{event_id}/status"] == {"POST"}
+    assert methods["/admin/events/{event_id}/package"] == {"POST"}
