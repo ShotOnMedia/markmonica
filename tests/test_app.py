@@ -18,7 +18,7 @@ def test_homepage_has_security_headers():
     with TestClient(app) as client:
         response = client.get("/")
     assert response.status_code == 200
-    assert "MarkMonica" in response.text
+    assert "Memories' Events" in response.text
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]

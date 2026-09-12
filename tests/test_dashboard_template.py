@@ -44,3 +44,32 @@ def test_guest_font_customization_is_wired_into_host_and_guest_templates():
     assert 'Great Vibes' in styles
     assert 'Playfair Display' in styles
     assert '.guest-event-intro h1' in styles
+
+
+def test_public_homepage_has_product_ctas_and_sections():
+    template = Path("templates/index.html").read_text()
+    assert '/static/home.css' in template
+    assert 'Create your event' in template
+    assert 'See how it works' in template
+    assert 'How it works' in template
+    assert 'Simple for guests. Useful for hosts.' in template
+    assert 'href="/register"' in template
+    assert 'href="/login"' in template
+    assert Path("static/home.css").exists()
+
+
+def test_memories_events_branding_is_shared_across_public_and_host_pages():
+    logo = '/static/memories-events-logo.svg'
+    for path in [
+        "templates/index.html",
+        "templates/login.html",
+        "templates/register.html",
+        "templates/dashboard.html",
+        "templates/event_manage.html",
+        "templates/guest_event.html",
+    ]:
+        template = Path(path).read_text()
+        assert "Memories' Events" in template
+        assert logo in template
+    assert Path("static/memories-events-logo.svg").exists()
+    assert Path("static/brand.css").exists()
