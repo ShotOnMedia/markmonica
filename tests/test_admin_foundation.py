@@ -7,7 +7,7 @@ from app.models import User
 
 
 def test_admin_routes_are_registered():
-    paths = {route.path for route in app.routes}
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
     assert "/admin" in paths
     assert "/admin/users" in paths
     assert "/admin/users/{user_id}" in paths
