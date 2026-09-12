@@ -45,15 +45,16 @@ def test_upload_validation_rejects_empty_file():
     assert exc_info.value.status_code == 400
 
 
-def test_default_package_is_billing_neutral_and_resolvable():
+def test_legacy_free_package_remains_unrestricted():
     package = get_package("free")
-    assert package.code == "free"
-    assert package.max_events == 3
+    assert package.code == "premium"
+    assert package.max_media_per_event is None
+    assert package.max_storage_bytes_per_event is None
     assert package.guest_gallery is True
     assert package.archive_downloads is True
 
 
-def test_unknown_package_falls_back_to_default():
+def test_unknown_package_falls_back_to_safe_legacy_entitlement():
     metadata = package_metadata("not-a-real-package")
-    assert metadata["code"] == "free"
-    assert metadata["limits"]["max_media_per_event"] == 250
+    assert metadata["code"] == "premium"
+    assert metadata["limits"]["max_media_per_event"] is None
