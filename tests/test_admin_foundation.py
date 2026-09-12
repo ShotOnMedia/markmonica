@@ -2,13 +2,15 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.admin import router as admin_router
 from app.asgi import app
 from app.models import User
 
 
 def test_admin_routes_are_registered():
-    paths = {route.path for route in app.routes if hasattr(route, "path")}
+    paths = {route.path for route in admin_router.routes if hasattr(route, "path")}
     assert "/admin" in paths
+    assert "/admin/" in paths
     assert "/admin/users" in paths
     assert "/admin/users/{user_id}" in paths
     assert "/admin/events" in paths
