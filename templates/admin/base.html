@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{% block title %}Admin{% endblock %} · Memories' Events</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+<div class="admin-shell">
+  <aside class="admin-sidebar">
+    <a class="admin-brand" href="/admin"><img src="/static/memories-events-logo.svg" alt="Memories' Events"><span>Platform Admin</span></a>
+    <nav>
+      <a class="{{ 'active' if section == 'dashboard' else '' }}" href="/admin">Overview</a>
+      <a class="{{ 'active' if section == 'users' else '' }}" href="/admin/users">Users</a>
+      <a class="{{ 'active' if section == 'events' else '' }}" href="/admin/events">Events</a>
+      <a class="{{ 'active' if section == 'media' else '' }}" href="/admin/media">Media & storage</a>
+      <span class="nav-disabled">Packages <small>Next</small></span>
+      <span class="nav-disabled">System <small>Next</small></span>
+    </nav>
+    <div class="admin-sidebar-foot"><strong>{{ admin.display_name }}</strong><span>{{ admin.email }}</span><a href="/dashboard">Host dashboard →</a></div>
+  </aside>
+  <main class="admin-main">
+    <header class="admin-top"><div><span class="eyebrow">Memories' Events</span><h1>{% block heading %}Platform Admin{% endblock %}</h1></div><span class="admin-pill">Administrator</span></header>
+    {% block content %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>
