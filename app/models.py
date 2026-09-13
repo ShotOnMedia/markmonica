@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, String, Text, Uuid
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -100,4 +100,18 @@ class PackageConfig(Base):
     archive_downloads: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     custom_event_design: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+class BrandingSettings(Base):
+    __tablename__ = "branding_settings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    platform_name: Mapped[str] = mapped_column(String(160), default="Memories' Events", nullable=False)
+    support_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    footer_text: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    primary_color: Mapped[str] = mapped_column(String(7), default="#a47f76", nullable=False)
+    secondary_color: Mapped[str] = mapped_column(String(7), default="#302b2a", nullable=False)
+    background_color: Mapped[str] = mapped_column(String(7), default="#f7f4f2", nullable=False)
+    font_family: Mapped[str] = mapped_column(String(64), default="inter", nullable=False)
+    logo_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    favicon_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
