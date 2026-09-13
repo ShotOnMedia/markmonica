@@ -1,0 +1,9 @@
+{% extends "admin/base.html" %}
+{% block title %}Users{% endblock %}{% block heading %}Users{% endblock %}
+{% block content %}
+<section class="panel"><form class="filters" method="get"><input name="q" value="{{ q }}" placeholder="Search name or email"><button>Search</button>{% if q %}<a href="/admin/users">Clear</a>{% endif %}</form></section>
+<section class="panel table-panel"><div class="panel-head"><div><span class="eyebrow">Accounts</span><h2>{{ users|length }} user{{ '' if users|length == 1 else 's' }}</h2></div></div>
+<div class="table-wrap"><table><thead><tr><th>User</th><th>Status</th><th>Events</th><th>Joined</th><th></th></tr></thead><tbody>
+{% for item in users %}<tr><td><strong>{{ item.display_name }}</strong><span>{{ item.email }}</span></td><td><span class="badge {{ 'ok' if item.is_active else 'muted' }}">{{ 'Active' if item.is_active else 'Disabled' }}</span>{% if item.is_admin %} <span class="badge admin">Admin</span>{% endif %}</td><td>{{ event_counts.get(item.id, 0) }}</td><td>{{ item.created_at.strftime('%d %b %Y') }}</td><td><a href="/admin/users/{{ item.id }}">View →</a></td></tr>{% else %}<tr><td colspan="5" class="empty">No matching users.</td></tr>{% endfor %}
+</tbody></table></div></section>
+{% endblock %}

@@ -15,6 +15,7 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False)
     plan_code: Mapped[str] = mapped_column(String(64), default="free", index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
@@ -87,3 +88,16 @@ class ArchiveJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     event: Mapped[Event] = relationship(back_populates="archive_jobs")
+
+class PackageConfig(Base):
+    __tablename__ = "package_configs"
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    max_media_per_event: Mapped[int | None] = mapped_column(nullable=True)
+    max_storage_bytes_per_event: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    max_video_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    guest_gallery: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    archive_downloads: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    custom_event_design: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)

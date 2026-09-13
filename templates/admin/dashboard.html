@@ -1,0 +1,19 @@
+{% extends "admin/base.html" %}
+{% block title %}Overview{% endblock %}
+{% block heading %}Platform overview{% endblock %}
+{% block content %}
+<section class="stat-grid">
+  <article class="stat"><span>Users</span><strong>{{ stats.users }}</strong><small>registered hosts</small></article>
+  <article class="stat"><span>Events</span><strong>{{ stats.events }}</strong><small>{{ stats.live_events }} live</small></article>
+  <article class="stat"><span>Memories</span><strong>{{ stats.media }}</strong><small>photos + videos</small></article>
+  <article class="stat"><span>Original storage</span><strong>{{ storage_label }}</strong><small>uploaded media</small></article>
+</section>
+<div class="admin-columns">
+<section class="panel"><div class="panel-head"><div><span class="eyebrow">Accounts</span><h2>Recent users</h2></div><a href="/admin/users">View all →</a></div>
+{% if recent_users %}<div class="rows">{% for item in recent_users %}<a class="row" href="/admin/users/{{ item.id }}"><div><strong>{{ item.display_name }}</strong><span>{{ item.email }}</span></div><div class="row-right"><span class="badge {{ 'ok' if item.is_active else 'muted' }}">{{ 'Active' if item.is_active else 'Disabled' }}</span><small>{{ item.created_at.strftime('%d %b %Y') }}</small></div></a>{% endfor %}</div>{% else %}<p class="empty">No users yet.</p>{% endif %}
+</section>
+<section class="panel"><div class="panel-head"><div><span class="eyebrow">Celebrations</span><h2>Recent events</h2></div><a href="/admin/events">View all →</a></div>
+{% if recent_events %}<div class="rows">{% for item in recent_events %}<div class="row"><div><strong>{{ item.title }}</strong><span>{{ item.owner.email }}</span></div><div class="row-right"><span class="badge {{ 'ok' if item.status == 'live' else 'muted' }}">{{ item.status|title }}</span><small>{{ item.package_code|title }}</small></div></div>{% endfor %}</div>{% else %}<p class="empty">No events yet.</p>{% endif %}
+</section>
+</div>
+{% endblock %}
