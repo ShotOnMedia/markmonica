@@ -68,9 +68,12 @@ def test_admin_templates_and_styles_exist():
 
 
 def test_admin_mutation_routes_are_post_only():
-    methods = {route.path: route.methods for route in admin_router.routes if hasattr(route, "methods")}
-    assert methods["/admin/users/{user_id}/status"] == {"POST"}
-    assert methods["/admin/events/{event_id}/status"] == {"POST"}
-    assert methods["/admin/events/{event_id}/package"] == {"POST"}
-    assert methods["/admin/packages/{code}"] == {"POST"}
-    assert methods["/admin/branding"] == {"GET", "POST"}
+    route_methods: dict[str, set[str]] = {}
+    for route in admin_router.routes:
+        if hasattr(route, "methods"):
+            route_methods.setdefault(route.path, set()).update(route.methods)
+    assert route_methods["/admin/users/{user_id}/status"] == {"POST"}
+    assert route_methods["/admin/events/{event_id}/status"] == {"POST"}
+    assert route_methods["/admin/events/{event_id}/package"] == {"POST"}
+    assert route_methods["/admin/packages/{code}"] == {"POST"}
+    assert route_methods["/admin/branding"] == {"GET", "POST"}
