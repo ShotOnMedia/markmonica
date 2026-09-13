@@ -115,3 +115,15 @@ class BrandingSettings(Base):
     logo_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     favicon_object_key: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+class AdminActivity(Base):
+    __tablename__ = "admin_activity"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    admin_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
+    action: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    target_label: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
+    admin_user: Mapped[User | None] = relationship()
