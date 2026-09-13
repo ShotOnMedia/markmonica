@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+{% block title %}System{% endblock %}
+{% block heading %}System{% endblock %}
+{% block content %}
+<section class="panel system-hero">
+  <div class="panel-head"><div><span class="eyebrow">Operations</span><h2>Platform health</h2></div><span class="badge {{ 'live' if overall_ok else 'draft' }}">{{ 'Healthy' if overall_ok else 'Attention required' }}</span></div>
+  <p class="muted-copy">Live operational checks and workload visibility. This screen is deliberately read-only in the first pass.</p>
+</section>
+<div class="stats-grid system-stats">
+  {% for service in services %}<article class="stat-card"><span>{{ service.name }}</span><strong>{{ 'Online' if service.ok else 'Unavailable' }}</strong><small>{{ service.detail }}</small></article>{% endfor %}
+  <article class="stat-card"><span>Worker queue</span><strong>{{ queue_depth if queue_depth is not none else '—' }}</strong><small>{{ queue_name }}</small></article>
+</div>
+<div class="two-col">
+  <section class="panel"><span class="eyebrow">Runtime</span><h2>Application</h2><dl class="detail-list"><div><dt>Application</dt><dd>{{ app_name }}</dd></div><div><dt>Version</dt><dd>{{ version }}</dd></div><div><dt>Environment</dt><dd>{{ environment|title }}</dd></div><div><dt>Memories</dt><dd>{{ media_count }}</dd></div><div><dt>Original storage</dt><dd>{{ storage_label }}</dd></div></dl></section>
+  <section class="panel"><span class="eyebrow">Pipeline</span><h2>Media processing</h2><div class="metric-row"><div><strong>{{ processing_attention }}</strong><span>Need attention</span></div><div><strong>{{ failed_media }}</strong><span>Failed</span></div><div><strong>{{ stale_processing }}</strong><span>Stale &gt; 2h</span></div></div>{% for status, count in processing %}<div class="health-row"><span class="badge {{ 'live' if status in ['ready','completed','processed'] else 'draft' }}">{{ (status or 'unknown')|title }}</span><strong>{{ count }}</strong></div>{% else %}<p class="muted-copy">No media processing records.</p>{% endfor %}</section>
+</div>
+<div class="two-col">
+  <section class="panel"><div class="panel-head"><div><span class="eyebrow">Archives</span><h2>Download jobs</h2></div><span class="muted-copy">{{ archive_total }} total</span></div><div class="metric-row"><div><strong>{{ archive_active }}</strong><span>Queued / processing</span></div><div><strong>{{ archive_failed }}</strong><span>Failed</span></div></div>{% for status, count in archive_rows %}<div class="health-row"><span>{{ (status or 'unknown')|title }}</span><strong>{{ count }}</strong></div>{% else %}<p class="muted-copy">No archive jobs yet.</p>{% endfor %}</section>
+  <section class="panel"><span class="eyebrow">Failures</span><h2>Recent processing errors</h2>{% for item in recent_failures %}<div class="failure-row"><div><strong>{{ item.original_filename }}</strong><span>{{ item.created_at.strftime('%d %b %Y %H:%M') }} UTC</span></div><p>{{ item.processing_error or 'No error detail was recorded.' }}</p></div>{% else %}<div class="empty compact">No failed media processing. Everything looks clear.</div>{% endfor %}</section>
+</div>
+{% endblock %}
