@@ -59,17 +59,25 @@ def test_public_homepage_has_product_ctas_and_sections():
 
 
 def test_memories_events_branding_is_shared_across_public_and_host_pages():
-    logo = '/static/memories-events-logo.svg'
+    managed_logo = '/brand/logo'
     for path in [
         "templates/index.html",
         "templates/login.html",
         "templates/register.html",
         "templates/dashboard.html",
-        "templates/event_manage.html",
-        "templates/guest_event.html",
     ]:
         template = Path(path).read_text()
         assert "Memories' Events" in template
-        assert logo in template
+        assert managed_logo in template
+
+    # Event-specific screens keep the bundled fallback mark for now; the
+    # platform-wide white-label endpoint is introduced first on public/auth,
+    # dashboard and admin surfaces.
+    fallback_logo = '/static/memories-events-logo.svg'
+    for path in ["templates/event_manage.html", "templates/guest_event.html"]:
+        template = Path(path).read_text()
+        assert "Memories' Events" in template
+        assert fallback_logo in template
+
     assert Path("static/memories-events-logo.svg").exists()
     assert Path("static/brand.css").exists()
