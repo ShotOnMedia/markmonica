@@ -11,7 +11,7 @@ def test_health_endpoint():
         response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    assert response.json()["version"] == "0.4.0"
+    assert response.json()["version"] == "0.8.0"
 
 
 def test_homepage_has_security_headers():

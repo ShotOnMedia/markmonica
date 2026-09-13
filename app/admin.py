@@ -1,15 +1,18 @@
+from io import BytesIO
 from pathlib import Path
 import uuid
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.branding import DEFAULTS as BRAND_DEFAULTS, FONT_MAP, valid_hex
 from app.db import get_db
-from app.models import Event, Media, PackageConfig, User
+from app.models import BrandingSettings, Event, Media, PackageConfig, User
 from app.security import user_from_session_token
+from app.services.storage import delete_objects, upload_fileobj
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -18,6 +21,8 @@ SESSION_COOKIE = "markmonica_session"
 GIB = 1024**3
 MIB = 1024**2
 READY_PROCESSING_STATES = {"ready", "completed", "processed"}
+BRAND_LOGO_TYPES = {"image/svg+xml": "svg", "image/png": "png", "image/webp": "webp", "image/jpeg": "jpg"}
+BRAND_FAVICON_TYPES = {"image/svg+xml": "svg", "image/png": "png", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico"}
 
 
 def admin_user(request: Request, db: Session) -> User | None:
@@ -52,6 +57,32 @@ def parse_optional_limit(value: str, multiplier: int = 1) -> int | None:
     if number < 0:
         raise HTTPException(400, "Package limits cannot be negative.")
     return int(number * multiplier)
+
+
+def get_or_create_branding(db: Session) -> BrandingSettings:
+    branding = db.get(BrandingSettings, 1)
+    if branding is None:
+        branding = BrandingSettings(id=1)
+        db.add(branding)
+        db.flush()
+    return branding
+
+
+async def store_brand_asset(upload: UploadFile | None, allowed: dict[str, str], prefix: str, max_bytes: int) -> str | None:
+    if upload is None or not upload.filename:
+        return None
+    content_type = (upload.content_type or "").lower()
+    extension = allowed.get(content_type)
+    if extension is None:
+        raise HTTPException(415, "Unsupported branding asset type.")
+    data = await upload.read(max_bytes + 1)
+    if not data:
+        raise HTTPException(400, "Branding assets cannot be empty.")
+    if len(data) > max_bytes:
+        raise HTTPException(413, "Branding asset is too large.")
+    object_key = f"branding/{prefix}/{uuid.uuid4().hex}.{extension}"
+    upload_fileobj(BytesIO(data), object_key, content_type)
+    return object_key
 
 
 @router.get("", response_class=HTMLResponse)
@@ -214,14 +245,8 @@ def packages(request: Request, db: Session = Depends(get_db)):
     admin = require_admin(request, db)
     rows = db.scalars(select(PackageConfig).order_by(PackageConfig.code)).all()
     usage_rows = db.execute(
-        select(
-            Event.package_code,
-            func.count(func.distinct(Event.id)),
-            func.count(Media.id),
-            func.coalesce(func.sum(Media.size_bytes), 0),
-        )
-        .outerjoin(Media, Media.event_id == Event.id)
-        .group_by(Event.package_code)
+        select(Event.package_code, func.count(func.distinct(Event.id)), func.count(Media.id), func.coalesce(func.sum(Media.size_bytes), 0))
+        .outerjoin(Media, Media.event_id == Event.id).group_by(Event.package_code)
     ).all()
     usage = {code: {"events": events, "media": media, "storage": storage} for code, events, media, storage in usage_rows}
     return templates.TemplateResponse(request=request, name="admin/packages.html", context={
@@ -231,19 +256,7 @@ def packages(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/packages/{code}")
-def update_package(
-    code: str,
-    request: Request,
-    name: str = Form(...),
-    max_media_per_event: str = Form(""),
-    max_storage_gb: str = Form(""),
-    max_video_mb: str = Form(""),
-    guest_gallery: str | None = Form(None),
-    archive_downloads: str | None = Form(None),
-    custom_event_design: str | None = Form(None),
-    is_active: str | None = Form(None),
-    db: Session = Depends(get_db),
-):
+def update_package(code: str, request: Request, name: str = Form(...), max_media_per_event: str = Form(""), max_storage_gb: str = Form(""), max_video_mb: str = Form(""), guest_gallery: str | None = Form(None), archive_downloads: str | None = Form(None), custom_event_design: str | None = Form(None), is_active: str | None = Form(None), db: Session = Depends(get_db)):
     require_admin(request, db)
     package = db.get(PackageConfig, code)
     if package is None:
@@ -265,3 +278,59 @@ def update_package(
             raise HTTPException(400, "A package with assigned events cannot be disabled.")
     db.commit()
     return RedirectResponse("/admin/packages", status_code=303)
+
+
+@router.get("/branding", response_class=HTMLResponse)
+def branding(request: Request, db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    brand = get_or_create_branding(db)
+    db.commit()
+    return templates.TemplateResponse(request=request, name="admin/branding.html", context={
+        "admin": admin, "section": "branding", "brand": brand, "fonts": FONT_MAP,
+    })
+
+
+@router.post("/branding")
+async def update_branding(
+    request: Request,
+    platform_name: str = Form(...),
+    support_email: str = Form(""),
+    footer_text: str = Form(""),
+    primary_color: str = Form(BRAND_DEFAULTS["primary_color"]),
+    secondary_color: str = Form(BRAND_DEFAULTS["secondary_color"]),
+    background_color: str = Form(BRAND_DEFAULTS["background_color"]),
+    font_family: str = Form("inter"),
+    logo: UploadFile | None = File(None),
+    favicon: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    brand = get_or_create_branding(db)
+    name = platform_name.strip()[:160]
+    if not name:
+        raise HTTPException(400, "Platform name is required.")
+    email = support_email.strip().lower()[:320]
+    if email and "@" not in email:
+        raise HTTPException(400, "Support email must be a valid email address.")
+    if font_family not in FONT_MAP:
+        raise HTTPException(400, "Unsupported platform font.")
+    brand.platform_name = name
+    brand.support_email = email or None
+    brand.footer_text = footer_text.strip()[:320] or None
+    brand.primary_color = valid_hex(primary_color, str(BRAND_DEFAULTS["primary_color"]))
+    brand.secondary_color = valid_hex(secondary_color, str(BRAND_DEFAULTS["secondary_color"]))
+    brand.background_color = valid_hex(background_color, str(BRAND_DEFAULTS["background_color"]))
+    brand.font_family = font_family
+    new_logo = await store_brand_asset(logo, BRAND_LOGO_TYPES, "logo", 5 * MIB)
+    new_favicon = await store_brand_asset(favicon, BRAND_FAVICON_TYPES, "favicon", 2 * MIB)
+    old_assets = []
+    if new_logo:
+        old_assets.append(brand.logo_object_key)
+        brand.logo_object_key = new_logo
+    if new_favicon:
+        old_assets.append(brand.favicon_object_key)
+        brand.favicon_object_key = new_favicon
+    db.commit()
+    if any(old_assets):
+        delete_objects(old_assets)
+    return RedirectResponse("/admin/branding", status_code=303)

@@ -1,0 +1,37 @@
+{% extends "admin/base.html" %}
+{% block title %}Analytics{% endblock %}
+{% block heading %}Analytics{% endblock %}
+{% block content %}
+<section class="stat-grid analytics-stats">
+  <article class="stat"><span>Users</span><strong>{{ stats.users }}</strong><small>+{{ stats.new_users }} in 30 days</small></article>
+  <article class="stat"><span>Events</span><strong>{{ stats.events }}</strong><small>{{ stats.live_events }} live · +{{ stats.new_events }} in 30 days</small></article>
+  <article class="stat"><span>Memories</span><strong>{{ stats.media }}</strong><small>+{{ stats.new_media }} in 30 days</small></article>
+  <article class="stat"><span>Original storage</span><strong>{{ storage_label }}</strong><small>{{ stats.processing_attention }} processing attention</small></article>
+</section>
+
+<div class="analytics-grid">
+  <section class="panel analytics-wide">
+    <div class="panel-head"><div><span class="eyebrow">Activity</span><h2>Uploads · last 30 days</h2></div><span class="analytics-note">Daily memories</span></div>
+    <div class="bar-chart" aria-label="Uploads during the last 30 days">
+      {% for row in daily %}<div class="bar-column" title="{{ row.label }} · {{ row.media }} uploads"><div class="bar-value">{{ row.media if row.media else '' }}</div><div class="bar-track"><div class="bar-fill" style="height:{{ row.upload_pct }}%"></div></div>{% if loop.index0 % 5 == 0 or loop.last %}<span>{{ row.label }}</span>{% else %}<span>&nbsp;</span>{% endif %}</div>{% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><span class="eyebrow">Commercial</span><h2>Package distribution</h2></div><a href="/admin/packages">Manage →</a></div>
+    {% if packages %}<div class="metric-list">{% for item in packages %}<div class="metric-row"><div><strong>{{ item.name }}</strong><span>{{ item.count }} event{{ '' if item.count == 1 else 's' }}</span></div><div class="metric-track"><i style="width:{{ item.pct }}%"></i></div></div>{% endfor %}</div>{% else %}<p class="empty">No package usage yet.</p>{% endif %}
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><span class="eyebrow">Pipeline</span><h2>Processing health</h2></div><a href="/admin/media">Media →</a></div>
+    {% if processing %}<div class="health-list">{% for item in processing %}<div><span class="badge {{ 'ok' if item.status in ['ready','completed','processed'] else 'muted' }}">{{ item.status|title }}</span><strong>{{ item.count }}</strong></div>{% endfor %}</div>{% else %}<p class="empty">No media processing data yet.</p>{% endif %}
+  </section>
+
+  <section class="panel analytics-wide table-panel">
+    <div class="panel-head"><div><span class="eyebrow">Storage</span><h2>Largest events</h2></div><a href="/admin/events">All events →</a></div>
+    <div class="table-wrap"><table><thead><tr><th>Event</th><th>Package</th><th>Memories</th><th>Original storage</th></tr></thead><tbody>
+      {% for event_id, title, package_code, media_count, storage in largest_events %}<tr><td><a class="table-primary" href="/admin/events/{{ event_id }}"><strong>{{ title }}</strong></a></td><td>{{ package_code|title }}</td><td>{{ media_count }}</td><td>{{ fmt_bytes(storage) }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No events yet.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+</div>
+{% endblock %}

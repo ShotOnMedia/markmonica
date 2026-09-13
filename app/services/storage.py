@@ -69,14 +69,13 @@ def create_presigned_download(object_key: str, expires_in: int = 900, filename: 
     params = {"Bucket": settings.s3_bucket, "Key": object_key}
     download_name = response_filename or filename
     if download_name:
-        # Setting the response header on the signed storage request makes the
-        # filename survive the redirect to MinIO/R2/S3.
         params["ResponseContentDisposition"] = f'attachment; filename="{download_name}"'
     return get_public_s3_client().generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)
 
 def head_object(object_key: str): return get_s3_client().head_object(Bucket=settings.s3_bucket, Key=object_key)
 def download_object(object_key: str, destination: str | Path) -> None: get_s3_client().download_file(settings.s3_bucket, object_key, str(destination))
 def upload_object(source: str | Path, object_key: str, content_type: str) -> None: get_s3_client().upload_file(str(source), settings.s3_bucket, object_key, ExtraArgs={"ContentType": content_type})
+def upload_fileobj(fileobj, object_key: str, content_type: str) -> None: get_s3_client().upload_fileobj(fileobj, settings.s3_bucket, object_key, ExtraArgs={"ContentType": content_type})
 
 def delete_objects(object_keys: list[str | None]) -> None:
     """Delete the supplied object keys. Missing objects are harmless; other storage errors propagate."""
