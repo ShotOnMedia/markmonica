@@ -8,13 +8,16 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import Event, Media, User
+from app.models import Event, Media, PackageConfig, User
 from app.security import user_from_session_token
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 router = APIRouter(prefix="/admin", tags=["admin"])
 SESSION_COOKIE = "markmonica_session"
+GIB = 1024**3
+MIB = 1024**2
+READY_PROCESSING_STATES = {"ready", "completed", "processed"}
 
 
 def admin_user(request: Request, db: Session) -> User | None:
@@ -36,6 +39,19 @@ def fmt_bytes(value: int | None) -> str:
             return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
         size /= 1024
     return "0 B"
+
+
+def parse_optional_limit(value: str, multiplier: int = 1) -> int | None:
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise HTTPException(400, "Package limits must be numeric or blank for unlimited.") from exc
+    if number < 0:
+        raise HTTPException(400, "Package limits cannot be negative.")
+    return int(number * multiplier)
 
 
 @router.get("", response_class=HTMLResponse)
@@ -136,11 +152,13 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
         "all": len(media),
         "photos": sum(1 for item in media if item.content_type.startswith("image/")),
         "videos": sum(1 for item in media if item.content_type.startswith("video/")),
-        "processing": sum(1 for item in media if item.processing_status not in {"completed", "processed"}),
+        "processing": sum(1 for item in media if item.processing_status not in READY_PROCESSING_STATES),
     }
+    packages = db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.code)).all()
     return templates.TemplateResponse(request=request, name="admin/event_detail.html", context={
         "admin": admin, "section": "events", "event": event, "media": media,
         "counts": counts, "storage_label": fmt_bytes(storage), "fmt_bytes": fmt_bytes,
+        "packages": packages,
     })
 
 
@@ -163,9 +181,10 @@ def event_package(event_id: uuid.UUID, request: Request, package_code: str = For
     event = db.get(Event, event_id)
     if event is None:
         raise HTTPException(404)
-    if package_code not in {"starter", "celebration", "premium"}:
-        raise HTTPException(400, "Invalid package.")
-    event.package_code = package_code
+    package = db.get(PackageConfig, package_code)
+    if package is None or not package.is_active:
+        raise HTTPException(400, "Invalid or inactive package.")
+    event.package_code = package.code
     db.commit()
     return RedirectResponse(f"/admin/events/{event.id}", status_code=303)
 
@@ -188,3 +207,61 @@ def media_overview(request: Request, q: str = "", processing: str = "", db: Sess
         "admin": admin, "section": "media", "media": rows, "q": q, "processing": processing,
         "total_count": total_count, "storage_label": fmt_bytes(total_storage), "failed": failed, "fmt_bytes": fmt_bytes,
     })
+
+
+@router.get("/packages", response_class=HTMLResponse)
+def packages(request: Request, db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    rows = db.scalars(select(PackageConfig).order_by(PackageConfig.code)).all()
+    usage_rows = db.execute(
+        select(
+            Event.package_code,
+            func.count(func.distinct(Event.id)),
+            func.count(Media.id),
+            func.coalesce(func.sum(Media.size_bytes), 0),
+        )
+        .outerjoin(Media, Media.event_id == Event.id)
+        .group_by(Event.package_code)
+    ).all()
+    usage = {code: {"events": events, "media": media, "storage": storage} for code, events, media, storage in usage_rows}
+    return templates.TemplateResponse(request=request, name="admin/packages.html", context={
+        "admin": admin, "section": "packages", "packages": rows, "usage": usage,
+        "fmt_bytes": fmt_bytes, "GIB": GIB, "MIB": MIB,
+    })
+
+
+@router.post("/packages/{code}")
+def update_package(
+    code: str,
+    request: Request,
+    name: str = Form(...),
+    max_media_per_event: str = Form(""),
+    max_storage_gb: str = Form(""),
+    max_video_mb: str = Form(""),
+    guest_gallery: str | None = Form(None),
+    archive_downloads: str | None = Form(None),
+    custom_event_design: str | None = Form(None),
+    is_active: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    require_admin(request, db)
+    package = db.get(PackageConfig, code)
+    if package is None:
+        raise HTTPException(404)
+    clean_name = name.strip()
+    if not clean_name:
+        raise HTTPException(400, "Package name is required.")
+    package.name = clean_name
+    package.max_media_per_event = parse_optional_limit(max_media_per_event)
+    package.max_storage_bytes_per_event = parse_optional_limit(max_storage_gb, GIB)
+    package.max_video_bytes = parse_optional_limit(max_video_mb, MIB)
+    package.guest_gallery = guest_gallery == "on"
+    package.archive_downloads = archive_downloads == "on"
+    package.custom_event_design = custom_event_design == "on"
+    package.is_active = is_active == "on"
+    if not package.is_active:
+        assigned = db.scalar(select(func.count(Event.id)).where(Event.package_code == package.code)) or 0
+        if assigned:
+            raise HTTPException(400, "A package with assigned events cannot be disabled.")
+    db.commit()
+    return RedirectResponse("/admin/packages", status_code=303)
