@@ -39,6 +39,13 @@ def require_feature(package: PackageDefinition, feature: str, message: str) -> N
         raise HTTPException(status_code=403, detail=message)
 
 
+def _lock_event_upload_reservations(db: Session, event: Event) -> None:
+    """Serialize quota reservations for one event when running on PostgreSQL."""
+    bind = db.get_bind()
+    if bind.dialect.name == "postgresql":
+        db.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(event.id)))))
+
+
 def enforce_upload_entitlement(
     db: Session,
     event: Event,
@@ -48,27 +55,26 @@ def enforce_upload_entitlement(
 ) -> tuple[PackageDefinition, EventPackageUsage]:
     """Enforce package limits before a presigned upload is issued.
 
-    PostgreSQL transaction-level advisory locking serializes upload reservations for
-    one event. Pending Media rows count toward usage, so concurrent presign requests
-    cannot all consume the same final package slot.
+    Pending Media rows count toward usage, so an issued presign reserves its package
+    slot and bytes. PostgreSQL deployments serialize those reservations per event.
     """
-    db.execute(select(func.pg_advisory_xact_lock(func.hashtext(str(event.id)))))
+    _lock_event_upload_reservations(db, event)
     package = get_package(event.package_code, db=db)
     usage = event_package_usage(db, event)
 
     if content_type.startswith("video/") and package.max_video_bytes is not None and size_bytes > package.max_video_bytes:
         raise HTTPException(
             status_code=413,
-            detail=f"This video exceeds the {package.name} package's maximum video size.",
+            detail=f"Videos for this event are limited by the {package.name} package.",
         )
     if package.max_media_per_event is not None and usage.media_count >= package.max_media_per_event:
         raise HTTPException(
             status_code=409,
-            detail=f"This event has reached its {package.name} package limit of {package.max_media_per_event} memories.",
+            detail=f"This event has reached its {package.max_media_per_event}-memory {package.name} package limit.",
         )
     if package.max_storage_bytes_per_event is not None and usage.storage_bytes + size_bytes > package.max_storage_bytes_per_event:
         raise HTTPException(
             status_code=409,
-            detail=f"This upload would exceed the {package.name} package storage allowance.",
+            detail=f"This event has reached its {package.name} package storage allowance.",
         )
     return package, usage
