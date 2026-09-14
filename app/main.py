@@ -23,6 +23,8 @@ from app.db import engine, get_db
 from app.models import ArchiveJob, Event, Media, User, UserSession, utcnow
 from app.security import hash_password, new_session, user_from_session_token, verify_password
 from app.services.archive import archive_expires_at, archive_is_expired
+from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
+from app.services.packages import get_package
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
 
@@ -166,15 +168,18 @@ def create_event(request:Request,title:str=Form(...),event_date:str=Form(""),db:
 def manage_event(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
-    event=event_for_owner(db,user,event_id);media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded").order_by(Media.created_at.desc())).all();return templates.TemplateResponse(request=request,name="event_manage.html",context={"user":user,"event":event,"guest_url":guest_url(event),"media":media})
+    event=event_for_owner(db,user,event_id);media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded").order_by(Media.created_at.desc())).all();package=get_package(event.package_code,db=db);usage=event_package_usage(db,event);return templates.TemplateResponse(request=request,name="event_manage.html",context={"user":user,"event":event,"guest_url":guest_url(event),"media":media,"package":package,"package_usage":usage})
 @app.post("/events/{event_id}")
 def update_event(event_id:str,request:Request,title:str=Form(...),event_date:str=Form(""),status:str=Form("draft"),welcome_message:str=Form(""),thank_you_message:str=Form(""),theme:str=Form("classic"),accent_color:str=Form(DEFAULT_ACCENT_COLOR),guest_font:str=Form("default"),guest_gallery_enabled:str|None=Form(None),db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
-    event=event_for_owner(db,user,event_id);event.title=title.strip() or event.title
+    event=event_for_owner(db,user,event_id);package=get_package(event.package_code,db=db);event.title=title.strip() or event.title
     try:event.event_date=date.fromisoformat(event_date) if event_date else None
     except ValueError:pass
-    event.status="live" if status=="live" else "draft";event.welcome_message=clean_message(welcome_message);event.thank_you_message=clean_message(thank_you_message);event.theme=theme if theme in ALLOWED_EVENT_THEMES else "classic";event.accent_color=clean_accent_color(accent_color);event.guest_font=guest_font if guest_font in ALLOWED_GUEST_FONTS else "default";event.guest_gallery_enabled=guest_gallery_enabled is not None;db.commit();return RedirectResponse(f"/events/{event.id}",303)
+    event.status="live" if status=="live" else "draft";event.welcome_message=clean_message(welcome_message);event.thank_you_message=clean_message(thank_you_message)
+    if package.custom_event_design:
+        event.theme=theme if theme in ALLOWED_EVENT_THEMES else "classic";event.accent_color=clean_accent_color(accent_color);event.guest_font=guest_font if guest_font in ALLOWED_GUEST_FONTS else "default"
+    event.guest_gallery_enabled=bool(package.guest_gallery and guest_gallery_enabled is not None);db.commit();return RedirectResponse(f"/events/{event.id}",303)
 @app.get("/events/{event_id}/qr.png")
 def event_qr(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
@@ -184,12 +189,12 @@ def event_qr(event_id:str,request:Request,db:Session=Depends(get_db)):
 def initiate_cover(event_id:uuid.UUID,payload:CoverUploadRequest,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,event_id);content_type=payload.content_type.lower().strip();validate_cover(content_type,payload.size_bytes);ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"}[content_type];object_key=f"events/{event.id}/cover/{uuid.uuid4().hex}.{ext}";return {"object_key":object_key,"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type}
+    event=event_for_owner(db,user,event_id);package=get_package(event.package_code,db=db);require_feature(package,"custom_event_design","Custom event design is not included in this event's package.");content_type=payload.content_type.lower().strip();validate_cover(content_type,payload.size_bytes);ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"}[content_type];object_key=f"events/{event.id}/cover/{uuid.uuid4().hex}.{ext}";return {"object_key":object_key,"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type}
 @app.post("/api/events/{event_id}/cover/confirm")
 def confirm_cover(event_id:uuid.UUID,payload:CoverConfirmRequest,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,event_id);content_type=payload.content_type.lower().strip();validate_cover(content_type,payload.size_bytes);prefix=f"events/{event.id}/cover/"
+    event=event_for_owner(db,user,event_id);package=get_package(event.package_code,db=db);require_feature(package,"custom_event_design","Custom event design is not included in this event's package.");content_type=payload.content_type.lower().strip();validate_cover(content_type,payload.size_bytes);prefix=f"events/{event.id}/cover/"
     if not payload.object_key.startswith(prefix):raise HTTPException(400,"Invalid cover object.")
     try:uploaded=head_object(payload.object_key)
     except ClientError as exc:raise HTTPException(409,"The cover photo could not be verified yet.") from exc
@@ -219,17 +224,18 @@ def host_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     return RedirectResponse(create_presigned_download(event.cover_object_key),302)
 @app.get("/e/{event_slug}/cover")
 def guest_cover(event_slug:str,db:Session=Depends(get_db)):
-    event=live_event_by_slug(db,event_slug)
-    if not event.cover_object_key:raise HTTPException(404)
+    event=live_event_by_slug(db,event_slug);package=get_package(event.package_code,db=db)
+    if not package.custom_event_design or not event.cover_object_key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(event.cover_object_key),302)
 @app.get("/e/{event_slug}",response_class=HTMLResponse)
 def guest_event(event_slug:str,request:Request,db:Session=Depends(get_db)):
-    event=live_event_by_slug(db,event_slug);guest_media=[]
-    if event.guest_gallery_enabled:guest_media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc())).all()
-    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"guest_media":guest_media,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":settings.max_video_upload_mb})
+    event=live_event_by_slug(db,event_slug);package=get_package(event.package_code,db=db);guest_media=[];guest_gallery_enabled=bool(package.guest_gallery and event.guest_gallery_enabled)
+    if guest_gallery_enabled:guest_media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc())).all()
+    global_video_bytes=settings.max_video_upload_mb*1024*1024;max_video_bytes=min(global_video_bytes,package.max_video_bytes) if package.max_video_bytes is not None else global_video_bytes
+    return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"guest_media":guest_media,"guest_gallery_enabled":guest_gallery_enabled,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":max_video_bytes//(1024*1024)})
 @app.post("/api/events/{event_slug}/uploads")
 def initiate_upload(event_slug:str,payload:UploadRequest,request:Request,db:Session=Depends(get_db)):
-    enforce_guest_upload_rate_limit(request,event_slug);event=live_event_by_slug(db,event_slug);content_type=payload.content_type.lower().strip();validate_upload(content_type,payload.size_bytes);filename=safe_filename(payload.filename);object_key=f"events/{event.id}/originals/{uuid.uuid4().hex}-{filename}";media=Media(event_id=event.id,object_key=object_key,original_filename=filename,content_type=content_type,size_bytes=payload.size_bytes,uploader_name=(payload.guest_name or "").strip()[:160] or None,status="pending",processing_status="pending");db.add(media);db.commit();db.refresh(media);return {"media_id":str(media.id),"object_key":object_key,"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type,"max_bytes":settings.max_video_upload_mb*1024*1024 if content_type in ALLOWED_VIDEO_TYPES else settings.max_image_upload_mb*1024*1024}
+    enforce_guest_upload_rate_limit(request,event_slug);event=live_event_by_slug(db,event_slug);content_type=payload.content_type.lower().strip();validate_upload(content_type,payload.size_bytes);package,_=enforce_upload_entitlement(db,event,content_type=content_type,size_bytes=payload.size_bytes);filename=safe_filename(payload.filename);object_key=f"events/{event.id}/originals/{uuid.uuid4().hex}-{filename}";media=Media(event_id=event.id,object_key=object_key,original_filename=filename,content_type=content_type,size_bytes=payload.size_bytes,uploader_name=(payload.guest_name or "").strip()[:160] or None,status="pending",processing_status="pending");db.add(media);db.commit();db.refresh(media);global_limit=(settings.max_video_upload_mb if content_type in ALLOWED_VIDEO_TYPES else settings.max_image_upload_mb)*1024*1024;package_limit=package.max_video_bytes if content_type in ALLOWED_VIDEO_TYPES else None;max_bytes=min(global_limit,package_limit) if package_limit is not None else global_limit;return {"media_id":str(media.id),"object_key":object_key,"upload_url":create_presigned_upload(object_key,content_type),"content_type":content_type,"max_bytes":max_bytes}
 @app.post("/api/events/{event_slug}/uploads/confirm")
 def confirm_upload(event_slug:str,payload:UploadConfirmRequest,request:Request,db:Session=Depends(get_db)):
     event=live_event_by_slug(db,event_slug);media=db.scalar(select(Media).where(Media.id==payload.media_id,Media.event_id==event.id))
@@ -257,8 +263,8 @@ def host_media_play(event_id:uuid.UUID,media_id:uuid.UUID,request:Request,db:Ses
     key=media.processed_object_key or media.object_key;return RedirectResponse(create_presigned_download(key),302)
 @app.get("/e/{event_slug}/media/{media_id}/preview")
 def guest_media_preview(event_slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
-    event=live_event_by_slug(db,event_slug)
-    if not event.guest_gallery_enabled:raise HTTPException(404)
+    event=live_event_by_slug(db,event_slug);package=get_package(event.package_code,db=db)
+    if not package.guest_gallery or not event.guest_gallery_enabled:raise HTTPException(404)
     media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready"))
     if media is None:raise HTTPException(404)
     key=media.preview_object_key or media.poster_object_key
@@ -267,8 +273,8 @@ def guest_media_preview(event_slug:str,media_id:uuid.UUID,db:Session=Depends(get
     return RedirectResponse(create_presigned_download(key),302)
 @app.get("/e/{event_slug}/media/{media_id}/play")
 def guest_media_play(event_slug:str,media_id:uuid.UUID,db:Session=Depends(get_db)):
-    event=live_event_by_slug(db,event_slug)
-    if not event.guest_gallery_enabled:raise HTTPException(404)
+    event=live_event_by_slug(db,event_slug);package=get_package(event.package_code,db=db)
+    if not package.guest_gallery or not event.guest_gallery_enabled:raise HTTPException(404)
     media=db.scalar(select(Media).where(Media.id==media_id,Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready"))
     if media is None or not media.content_type.startswith("video/") or not media.processed_object_key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(media.processed_object_key),302)
@@ -297,7 +303,7 @@ def delete_media(event_id:uuid.UUID,payload:MediaIdsRequest,request:Request,db:S
 def create_archive_job(event_id:uuid.UUID,payload:ArchiveRequest,request:Request,db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,event_id);requested=None
+    event=event_for_owner(db,user,event_id);package=get_package(event.package_code,db=db);require_feature(package,"archive_downloads","ZIP downloads are not included in this event's package.");requested=None
     if payload.media_ids:
         requested=list(dict.fromkeys(payload.media_ids));found=db.scalars(select(Media.id).where(Media.event_id==event.id,Media.status=="uploaded",Media.id.in_(requested))).all()
         if len(found)!=len(requested):raise HTTPException(404,"One or more selected items could not be found.")
@@ -314,7 +320,7 @@ def archive_status(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Sessio
 def archive_download(event_id:uuid.UUID,job_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:raise HTTPException(401)
-    event=event_for_owner(db,user,event_id);job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id))
+    event=event_for_owner(db,user,event_id);package=get_package(event.package_code,db=db);require_feature(package,"archive_downloads","ZIP downloads are not included in this event's package.");job=db.scalar(select(ArchiveJob).where(ArchiveJob.id==job_id,ArchiveJob.event_id==event.id))
     if job is None:raise HTTPException(404)
     if job.status=="expired" or (job.status=="ready" and archive_is_expired(job.completed_at)):
         return templates.TemplateResponse(request=request,name="archive_expired.html",context={"event":event,"job":job},status_code=410)

@@ -36,7 +36,8 @@ def test_guest_font_customization_is_wired_into_host_and_guest_templates():
     assert 'data-font-picker' in manage
     assert 'value="great-vibes"' in manage
     assert 'data-display-font="{{ event.guest_font or \'default\' }}"' in manage
-    assert 'data-display-font="{{ event.guest_font or \'default\' }}"' in guest
+    assert 'data-display-font="{{ (event.guest_font or \'default\') if custom_event_design_enabled else \'default\' }}"' in guest
+    assert 'custom_event_design_enabled' in guest
     assert 'fonts.googleapis.com/css2' in manage
     assert 'fonts.googleapis.com/css2' in guest
     assert css.exists()
