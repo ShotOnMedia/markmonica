@@ -256,7 +256,7 @@ def packages(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/packages/{code}")
-def update_package(code: str, request: Request, name: str = Form(...), max_media_per_event: str = Form(""), max_storage_gb: str = Form(""), max_video_mb: str = Form(""), guest_gallery: str | None = Form(None), archive_downloads: str | None = Form(None), custom_event_design: str | None = Form(None), is_active: str | None = Form(None), db: Session = Depends(get_db)):
+def update_package(code: str, request: Request, name: str = Form(...), max_media_per_event: str = Form(""), max_storage_gb: str = Form(""), max_video_mb: str = Form(""), price_zar: str = Form("0"), guest_gallery: str | None = Form(None), archive_downloads: str | None = Form(None), custom_event_design: str | None = Form(None), is_active: str | None = Form(None), db: Session = Depends(get_db)):
     require_admin(request, db)
     package = db.get(PackageConfig, code)
     if package is None:
@@ -268,6 +268,11 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
     package.max_media_per_event = parse_optional_limit(max_media_per_event)
     package.max_storage_bytes_per_event = parse_optional_limit(max_storage_gb, GIB)
     package.max_video_bytes = parse_optional_limit(max_video_mb, MIB)
+    try:
+        package.price_cents = max(0, round(float(price_zar or "0") * 100))
+    except ValueError:
+        raise HTTPException(400, "Package price must be a valid amount.")
+    package.currency = "ZAR"
     package.guest_gallery = guest_gallery == "on"
     package.archive_downloads = archive_downloads == "on"
     package.custom_event_design = custom_event_design == "on"
