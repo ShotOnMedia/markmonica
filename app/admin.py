@@ -284,7 +284,7 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
 def package_requests(request: Request, status: str = "", db: Session = Depends(get_db)):
     admin = require_admin(request, db)
     stmt = select(PackageOrder).order_by(PackageOrder.created_at.desc())
-    if status in {"pending", "approved", "cancelled"}:
+    if status in {"pending", "awaiting_payment", "paid", "approved", "failed", "cancelled"}:
         stmt = stmt.where(PackageOrder.status == status)
     orders = db.scalars(stmt.limit(250)).all()
     return templates.TemplateResponse(request=request, name="admin/package_requests.html", context={"admin": admin, "section": "package_requests", "orders": orders, "status": status})
