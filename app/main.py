@@ -23,7 +23,7 @@ from app.db import engine, get_db
 from app.models import ArchiveJob, Event, Media, PackageConfig, PackageOrder, User, UserSession, utcnow
 from app.security import hash_password, new_session, user_from_session_token, verify_password
 from app.services.archive import archive_expires_at, archive_is_expired
-from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
+from app.services.credential_vault import decrypt_secret\nfrom app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
 from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_checkout_fields_for_config, payfast_process_url, payfast_runtime_config, valid_payfast_itn_signature
 from app.services.packages import get_package
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
@@ -219,7 +219,7 @@ def payfast_cancel(order_id: uuid.UUID, request: Request, db: Session = Depends(
 @app.post("/payments/payfast/notify")
 async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     form=await request.form();items=[(str(k),str(v)) for k,v in form.multi_items()]
-    if not valid_payfast_itn_signature(items):raise HTTPException(400,"Invalid Payfast signature.")
+    provider=payfast_runtime_config(db)\n    if provider is None:raise HTTPException(503,"Payfast is not enabled.")\n    if not valid_payfast_itn_signature(items,decrypt_secret(provider.passphrase)):raise HTTPException(400,"Invalid Payfast signature.")
     data=dict(items)
     try:order_id=uuid.UUID(data.get("m_payment_id",""))
     except ValueError:raise HTTPException(400,"Invalid order reference.")
