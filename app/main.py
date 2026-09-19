@@ -127,9 +127,13 @@ def readiness():
     except Exception:pass
     checks["storage"]=bucket_is_ready();ready=all(checks.values());return JSONResponse({"status":"ready" if ready else "degraded","checks":checks},status_code=200 if ready else 503)
 @app.get("/",response_class=HTMLResponse)
-def home(request:Request):return templates.TemplateResponse(request=request,name="index.html",context={"app_name":settings.app_name,"version":__version__,"user":None})
+def home(request:Request,db:Session=Depends(get_db)):
+    user=current_user(request,db)
+    return templates.TemplateResponse(request=request,name="index.html",context={"app_name":settings.app_name,"version":__version__,"user":user})
 @app.get("/register",response_class=HTMLResponse)
-def register_page(request:Request):return templates.TemplateResponse(request=request,name="register.html",context={"error":None})
+def register_page(request:Request,db:Session=Depends(get_db)):
+    if current_user(request,db):return RedirectResponse("/dashboard",303)
+    return templates.TemplateResponse(request=request,name="register.html",context={"error":None})
 @app.post("/register")
 def register(request:Request,display_name:str=Form(...),email:str=Form(...),password:str=Form(...),db:Session=Depends(get_db)):
     require_same_origin(request);email=email.strip().lower();display_name=display_name.strip()
@@ -139,7 +143,9 @@ def register(request:Request,display_name:str=Form(...),email:str=Form(...),pass
     except IntegrityError:db.rollback();return templates.TemplateResponse(request=request,name="register.html",context={"error":"An account with that email address already exists."},status_code=409)
     _,token=new_session(db,user);response=RedirectResponse("/dashboard",303);set_session_cookie(response,token);return response
 @app.get("/login",response_class=HTMLResponse)
-def login_page(request:Request):return templates.TemplateResponse(request=request,name="login.html",context={"error":None})
+def login_page(request:Request,db:Session=Depends(get_db)):
+    if current_user(request,db):return RedirectResponse("/dashboard",303)
+    return templates.TemplateResponse(request=request,name="login.html",context={"error":None})
 @app.post("/login")
 def login(request:Request,email:str=Form(...),password:str=Form(...),db:Session=Depends(get_db)):
     require_same_origin(request);user=db.scalar(select(User).where(User.email==email.strip().lower(),User.is_active.is_(True)))
