@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app import __version__
 from app.db import engine, get_db
-from app.models import ArchiveJob, Event, Media, User, UserSession, utcnow
+from app.models import ArchiveJob, Event, Media, PackageConfig, PackageOrder, User, UserSession, utcnow
 from app.security import hash_password, new_session, user_from_session_token, verify_password
 from app.services.archive import archive_expires_at, archive_is_expired
 from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
@@ -164,6 +164,25 @@ def create_event(request:Request,title:str=Form(...),event_date:str=Form(""),db:
     try:parsed_date=date.fromisoformat(event_date) if event_date else None
     except ValueError:parsed_date=None
     event=Event(owner_id=user.id,title=title,event_date=parsed_date,slug=f"{slugify(title)}-{secrets.token_hex(3)}");db.add(event);db.commit();db.refresh(event);return RedirectResponse(f"/events/{event.id}",303)
+@app.get("/events/{event_id}/packages",response_class=HTMLResponse)
+def package_selection(event_id:str,request:Request,requested:str="",db:Session=Depends(get_db)):
+    user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);packages=db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.code)).all();current=get_package(event.package_code,db=db);requested_package=next((p for p in packages if p.code==requested),None)
+    return templates.TemplateResponse(request=request,name="package_select.html",context={"user":user,"event":event,"packages":packages,"current":current,"requested":requested_package})
+
+@app.post("/events/{event_id}/package-request")
+def package_request(event_id:str,request:Request,package_code:str=Form(...),db:Session=Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);package=db.get(PackageConfig,package_code)
+    if package is None or not package.is_active:raise HTTPException(400,"This package is not available.")
+    if package.code==event.package_code:return RedirectResponse(f"/events/{event.id}/packages",303)
+    existing=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status=="pending").order_by(PackageOrder.created_at.desc()))
+    if existing:existing.package_code=package.code;existing.updated_at=utcnow()
+    else:db.add(PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="host"))
+    db.commit();return RedirectResponse(f"/events/{event.id}/packages?requested={package.code}",303)
+
 @app.get("/events/{event_id}",response_class=HTMLResponse)
 def manage_event(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
