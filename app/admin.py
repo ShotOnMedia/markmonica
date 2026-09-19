@@ -341,8 +341,9 @@ def payment_settings(request: Request, db: Session = Depends(get_db)):
 def update_payfast_settings(request: Request,is_enabled: str|None=Form(None),is_sandbox: str|None=Form(None),merchant_id: str=Form(""),merchant_key: str=Form(""),passphrase: str=Form(""),db: Session=Depends(get_db)):
     require_admin(request,db);provider=db.get(PaymentProviderConfig,"payfast")
     if provider is None:provider=PaymentProviderConfig(code="payfast",display_name="Payfast");db.add(provider)
-    provider.is_enabled=is_enabled=="on";provider.is_sandbox=is_sandbox=="on";provider.merchant_id=merchant_id.strip() or None;provider.merchant_key=merchant_key.strip() or None
-    if passphrase.strip():provider.passphrase=passphrase.strip()
+    provider.is_enabled=is_enabled=="on";provider.is_sandbox=is_sandbox=="on";provider.merchant_id=merchant_id.strip() or None
+    if merchant_key.strip():provider.merchant_key=encrypt_secret(merchant_key.strip())
+    if passphrase.strip():provider.passphrase=encrypt_secret(passphrase.strip())
     provider.updated_at=utcnow();db.commit();return RedirectResponse("/admin/settings/payments",303)
 
 @router.get("/branding", response_class=HTMLResponse)
