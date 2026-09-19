@@ -3,7 +3,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
-import hashlib, json, re, secrets, time, uuid
+import hashlib, html, json, re, secrets, time, uuid
 
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
