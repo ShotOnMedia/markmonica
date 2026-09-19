@@ -55,6 +55,7 @@ class Event(Base):
     owner: Mapped[User] = relationship(back_populates="events")
     media: Mapped[list["Media"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     archive_jobs: Mapped[list["ArchiveJob"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    package_orders: Mapped[list["PackageOrder"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
 class Media(Base):
     __tablename__ = "media"
@@ -127,3 +128,19 @@ class AdminActivity(Base):
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
     admin_user: Mapped[User | None] = relationship()
+
+
+class PackageOrder(Base):
+    __tablename__ = "package_orders"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    package_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="host", nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    event: Mapped[Event] = relationship(back_populates="package_orders")
+    user: Mapped[User] = relationship()
