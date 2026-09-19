@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
 import hashlib, html, json, logging, re, secrets, time, uuid
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -209,7 +210,7 @@ def start_checkout(event_id: str, order_id: uuid.UUID, request: Request, db: Ses
     if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
     provider=payfast_runtime_config(db)
     if provider is None:raise HTTPException(503,"Payfast checkout is not enabled.")
-    begin_checkout(order,event,"manual");order.provider="payfast";order.provider_reference=str(order.id);fields=payfast_checkout_fields_for_config(order,event,user.email,settings.app_url,provider);db.commit()
+    order.provider="payfast";order.provider_reference=str(order.id);order.status="awaiting_payment";order.updated_at=utcnow();fields=payfast_checkout_fields_for_config(order,event,user.email,settings.app_url,provider);db.commit()
     inputs="".join(f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">' for k,v in fields.items())
     action=html.escape(payfast_process_url(provider.is_sandbox),quote=True)
     return HTMLResponse(f'<!doctype html><html><head><meta charset="utf-8"><title>Continue to Payfast</title></head><body><main><p>Redirecting to Payfast…</p><form method="post" action="{action}">{inputs}<button type="submit">Continue to Payfast</button></form></main></body></html>')
@@ -264,8 +265,11 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     if order.provider != "payfast":
         logger.warning("Payfast ITN rejected order=%s check=provider expected=payfast actual=%s",order_ref,order.provider)
         raise HTTPException(400,"Payment provider mismatch.")
-    try:received_cents=round(float(data.get("amount_gross",""))*100)
-    except (TypeError,ValueError):
+    try:
+        amount=Decimal(data.get("amount_gross","")).quantize(Decimal("0.01"),rounding=ROUND_HALF_UP)
+        if amount < 0:raise InvalidOperation
+        received_cents=int(amount*100)
+    except (InvalidOperation,ValueError,TypeError):
         logger.warning("Payfast ITN rejected order=%s check=amount_parse",order_ref)
         raise HTTPException(400,"Invalid payment amount.")
     if received_cents != order.amount_cents or order.currency != "ZAR":
