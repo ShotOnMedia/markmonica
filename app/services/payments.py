@@ -5,7 +5,7 @@ from urllib.parse import quote_plus
 
 from app.settings import settings
 
-from app.models import Event, PackageOrder, utcnow
+from app.models import Event, PackageOrder, PaymentProviderConfig, utcnow
 
 PAYMENT_PENDING = "pending"
 PAYMENT_AWAITING = "awaiting_payment"
@@ -39,8 +39,9 @@ class PayfastPaymentProvider:
 
 PROVIDERS: dict[str, PaymentProvider] = {"manual": ManualPaymentProvider(), "payfast": PayfastPaymentProvider()}
 
-def payfast_process_url() -> str:
-    return "https://sandbox.payfast.co.za/eng/process" if settings.payfast_sandbox else "https://www.payfast.co.za/eng/process"
+def payfast_process_url(is_sandbox: bool | None = None) -> str:
+    sandbox = settings.payfast_sandbox if is_sandbox is None else is_sandbox
+    return "https://sandbox.payfast.co.za/eng/process" if sandbox else "https://www.payfast.co.za/eng/process"
 
 def _encoded(value: object) -> str:
     return quote_plus(str(value).strip(), safe="")
@@ -94,3 +95,18 @@ def mark_failed(order: PackageOrder) -> None:
         raise ValueError("This order cannot be marked failed.")
     order.status = PAYMENT_FAILED
     order.updated_at = utcnow()
+
+
+def payfast_runtime_config(db):
+    provider = db.get(PaymentProviderConfig, "payfast")
+    if provider and provider.is_enabled:
+        return provider
+    return None
+
+def payfast_checkout_fields_for_config(order: PackageOrder, event: Event, email: str, app_url: str, provider: PaymentProviderConfig) -> dict[str, str]:
+    if not provider.merchant_id or not provider.merchant_key:
+        raise ValueError("Payfast merchant credentials are not configured.")
+    base=app_url.rstrip("/")
+    data={"merchant_id":provider.merchant_id,"merchant_key":provider.merchant_key,"return_url":f"{base}/payments/payfast/return?order_id={order.id}","cancel_url":f"{base}/payments/payfast/cancel?order_id={order.id}","notify_url":f"{base}/payments/payfast/notify","email_address":email,"m_payment_id":str(order.id),"amount":f"{order.amount_cents/100:.2f}","item_name":f"Memories Events - {order.package_code.title()} package"}
+    data["signature"]=payfast_signature(data,provider.passphrase)
+    return data
