@@ -179,8 +179,8 @@ def package_request(event_id:str,request:Request,package_code:str=Form(...),db:S
     if package is None or not package.is_active:raise HTTPException(400,"This package is not available.")
     if package.code==event.package_code:return RedirectResponse(f"/events/{event.id}/packages",303)
     existing=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status=="pending").order_by(PackageOrder.created_at.desc()))
-    if existing:existing.package_code=package.code;existing.updated_at=utcnow()
-    else:db.add(PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="host"))
+    if existing:existing.package_code=package.code;existing.amount_cents=package.price_cents;existing.currency=package.currency;existing.updated_at=utcnow()
+    else:db.add(PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="host",amount_cents=package.price_cents,currency=package.currency))
     db.commit();return RedirectResponse(f"/events/{event.id}/packages?requested={package.code}",303)
 
 @app.get("/events/{event_id}",response_class=HTMLResponse)
