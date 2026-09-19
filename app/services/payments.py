@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Protocol
 from hashlib import md5
 from urllib.parse import quote_plus
+from urllib.request import Request as UrlRequest, urlopen
 
 from app.settings import settings
 from app.services.credential_vault import decrypt_secret
@@ -113,3 +114,25 @@ def payfast_checkout_fields_for_config(order: PackageOrder, event: Event, email:
     data={"merchant_id":provider.merchant_id,"merchant_key":merchant_key,"return_url":f"{base}/payments/payfast/return?order_id={order.id}","cancel_url":f"{base}/payments/payfast/cancel?order_id={order.id}","notify_url":f"{base}/payments/payfast/notify","email_address":email,"m_payment_id":str(order.id),"amount":f"{order.amount_cents/100:.2f}","item_name":f"Memories Events - {order.package_code.title()} package"}
     data["signature"]=payfast_signature(data,passphrase)
     return data
+
+
+def payfast_validation_url(is_sandbox: bool) -> str:
+    host = "sandbox.payfast.co.za" if is_sandbox else "www.payfast.co.za"
+    return f"https://{host}/eng/query/validate"
+
+def payfast_param_string(form_items: list[tuple[str, str]]) -> str:
+    return "&".join(f"{key}={_encoded(value)}" for key, value in form_items if key != "signature")
+
+def valid_payfast_server_confirmation(form_items: list[tuple[str, str]], is_sandbox: bool, timeout: float = 10.0) -> bool:
+    payload = payfast_param_string(form_items).encode("ascii")
+    request = UrlRequest(
+        payfast_validation_url(is_sandbox),
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.status == 200 and response.read().decode("utf-8").strip() == "VALID"
+    except Exception:
+        return False
