@@ -4,6 +4,7 @@ from hashlib import md5
 from urllib.parse import quote_plus
 
 from app.settings import settings
+from app.services.credential_vault import decrypt_secret
 
 from app.models import Event, PackageOrder, PaymentProviderConfig, utcnow
 
@@ -107,6 +108,6 @@ def payfast_checkout_fields_for_config(order: PackageOrder, event: Event, email:
     if not provider.merchant_id or not provider.merchant_key:
         raise ValueError("Payfast merchant credentials are not configured.")
     base=app_url.rstrip("/")
-    data={"merchant_id":provider.merchant_id,"merchant_key":provider.merchant_key,"return_url":f"{base}/payments/payfast/return?order_id={order.id}","cancel_url":f"{base}/payments/payfast/cancel?order_id={order.id}","notify_url":f"{base}/payments/payfast/notify","email_address":email,"m_payment_id":str(order.id),"amount":f"{order.amount_cents/100:.2f}","item_name":f"Memories Events - {order.package_code.title()} package"}
-    data["signature"]=payfast_signature(data,provider.passphrase)
+    merchant_key=decrypt_secret(provider.merchant_key)\n    passphrase=decrypt_secret(provider.passphrase)\n    data={"merchant_id":provider.merchant_id,"merchant_key":merchant_key,"return_url":f"{base}/payments/payfast/return?order_id={order.id}","cancel_url":f"{base}/payments/payfast/cancel?order_id={order.id}","notify_url":f"{base}/payments/payfast/notify","email_address":email,"m_payment_id":str(order.id),"amount":f"{order.amount_cents/100:.2f}","item_name":f"Memories Events - {order.package_code.title()} package"}
+    data["signature"]=payfast_signature(data,passphrase)
     return data
