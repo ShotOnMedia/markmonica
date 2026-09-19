@@ -12,6 +12,8 @@ SESSION_COOKIE = "markmonica_session"
 
 def _describe(path: str, db):
     parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[1] == "orders":
+        return None
     if path == "/admin/branding":
         return "branding_updated", "platform", "branding", "Platform branding", "Branding settings were updated."
     if len(parts) >= 3 and parts[1] == "packages":
@@ -51,7 +53,10 @@ def install_admin_audit(app):
                 with SessionLocal() as db:
                     admin = user_from_session_token(db, request.cookies.get(SESSION_COOKIE))
                     if admin and admin.is_admin:
-                        action, target_type, target_id, target_label, detail = _describe(request.url.path, db)
+                        description = _describe(request.url.path, db)
+                        if description is None:
+                            return response
+                        action, target_type, target_id, target_label, detail = description
                         record_admin_activity(
                             db, admin, action,
                             target_type=target_type,
