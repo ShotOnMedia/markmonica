@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 
 from app.models import Event, PackageOrder
-from app.services.payments import begin_checkout, mark_failed, mark_paid
+from app.services.payments import begin_checkout, mark_failed, mark_paid, payfast_param_string, payfast_validation_url
 
 
 def make_order(status="pending"):
@@ -42,3 +42,12 @@ def test_failed_order_can_retry_checkout():
 def test_approved_order_cannot_restart_checkout():
     with pytest.raises(ValueError):
         begin_checkout(make_order("approved"), make_event())
+
+
+def test_payfast_param_string_preserves_itn_order_and_omits_signature():
+    items = [("m_payment_id", "order 1"), ("amount_gross", "500.00"), ("signature", "abc")]
+    assert payfast_param_string(items) == "m_payment_id=order+1&amount_gross=500.00"
+
+def test_payfast_validation_urls_are_environment_specific():
+    assert payfast_validation_url(True) == "https://sandbox.payfast.co.za/eng/query/validate"
+    assert payfast_validation_url(False) == "https://www.payfast.co.za/eng/query/validate"
