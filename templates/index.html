@@ -16,8 +16,7 @@
     <header class="home-nav">
         <a class="home-logo" href="/" aria-label="Memories' Events home"><img src="/brand/logo" alt="Platform logo"></a>
         <nav class="home-nav-actions" aria-label="Account">
-            <a class="home-nav-link" href="/login">Sign in</a>
-            <a class="home-nav-cta" href="/register">Create an event</a>
+            {% if user %}<a class="home-nav-link" href="/dashboard">Dashboard</a><a class="home-nav-cta" href="/dashboard">Create an event</a>{% else %}<a class="home-nav-link" href="/login">Sign in</a><a class="home-nav-cta" href="/register">Create an event</a>{% endif %}
         </nav>
     </header>
 
@@ -28,7 +27,7 @@
                 <h1>Every memory from your <em>big day.</em> One place.</h1>
                 <p class="home-lead">Create your event, share one QR code and let guests upload their photos and videos straight from their phones. No accounts. No chasing everyone afterwards.</p>
                 <div class="home-hero-actions">
-                    <a class="home-primary" href="/register">Create your event →</a>
+                    <a class="home-primary" href="{{ '/dashboard' if user else '/register' }}">Create your event →</a>
                     <a class="home-secondary" href="#how-it-works">See how it works</a>
                 </div>
                 <div class="home-microcopy" aria-label="Highlights">
@@ -91,7 +90,7 @@
             </div>
         </section>
 
-        <section class="home-section home-final"><div class="home-final-card"><h2>Your guests already have the camera. Give them one easy place to share.</h2><p>Create your event in a few minutes and have your QR code ready before the first guest arrives.</p><a class="home-primary" href="/register">Create your first event →</a></div></section>
+        <section class="home-section home-final"><div class="home-final-card"><h2>Your guests already have the camera. Give them one easy place to share.</h2><p>Create your event in a few minutes and have your QR code ready before the first guest arrives.</p><a class="home-primary" href="{{ '/dashboard' if user else '/register' }}">Create your first event →</a></div></section>
     </main>
 
     <footer class="home-footer"><a class="home-footer-logo" href="/" aria-label="Memories' Events home"><img src="/brand/logo" alt=""></a><span>Event memories, made simple.</span><span class="home-version">v{{ version }}</span></footer>
