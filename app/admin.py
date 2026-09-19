@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.branding import DEFAULTS as BRAND_DEFAULTS, FONT_MAP, valid_hex
 from app.db import get_db
-from app.models import BrandingSettings, Event, Media, PackageConfig, User
+from app.models import BrandingSettings, Event, Media, PackageConfig, PackageOrder, User, utcnow
 from app.security import user_from_session_token
 from app.services.storage import delete_objects, upload_fileobj
 
@@ -278,6 +278,52 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
             raise HTTPException(400, "A package with assigned events cannot be disabled.")
     db.commit()
     return RedirectResponse("/admin/packages", status_code=303)
+
+
+@router.get("/package-requests", response_class=HTMLResponse)
+def package_requests(request: Request, status: str = "", db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    stmt = select(PackageOrder).order_by(PackageOrder.created_at.desc())
+    if status in {"pending", "approved", "cancelled"}:
+        stmt = stmt.where(PackageOrder.status == status)
+    orders = db.scalars(stmt.limit(250)).all()
+    return templates.TemplateResponse(request=request, name="admin/package_requests.html", context={"admin": admin, "section": "package_requests", "orders": orders, "status": status})
+
+
+@router.post("/package-requests/{order_id}/approve")
+def approve_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    order = db.get(PackageOrder, order_id)
+    if order is None:
+        raise HTTPException(404)
+    if order.status != "pending":
+        raise HTTPException(409, "This package request is no longer pending.")
+    package = db.get(PackageConfig, order.package_code)
+    if package is None or not package.is_active:
+        raise HTTPException(400, "The requested package is no longer available.")
+    event = db.get(Event, order.event_id)
+    if event is None:
+        raise HTTPException(404)
+    event.package_code = package.code
+    event.package_assigned_at = utcnow()
+    order.status = "approved"
+    order.updated_at = utcnow()
+    db.commit()
+    return RedirectResponse("/admin/package-requests?status=pending", status_code=303)
+
+
+@router.post("/package-requests/{order_id}/cancel")
+def cancel_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    order = db.get(PackageOrder, order_id)
+    if order is None:
+        raise HTTPException(404)
+    if order.status != "pending":
+        raise HTTPException(409, "This package request is no longer pending.")
+    order.status = "cancelled"
+    order.updated_at = utcnow()
+    db.commit()
+    return RedirectResponse("/admin/package-requests?status=pending", status_code=303)
 
 
 @router.get("/branding", response_class=HTMLResponse)
