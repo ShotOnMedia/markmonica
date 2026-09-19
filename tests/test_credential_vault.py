@@ -3,7 +3,7 @@ from app.services import credential_vault
 
 def test_payment_secret_round_trip(monkeypatch):
     key=Fernet.generate_key().decode("ascii")
-    monkeypatch.setattr(credential_vault.settings,"payment_credentials_encryption_key",key)
+    monkeypatch.setattr(credential_vault.settings,"payment_credentials_encryption_key",key)\n    credential_vault._fernet.cache_clear()
     encrypted=credential_vault.encrypt_secret("super-secret")
     assert encrypted.startswith("enc:v1:")
     assert "super-secret" not in encrypted
