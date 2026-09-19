@@ -25,7 +25,7 @@ from app.security import hash_password, new_session, user_from_session_token, ve
 from app.services.archive import archive_expires_at, archive_is_expired
 from app.services.credential_vault import decrypt_secret
 from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
-from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_checkout_fields_for_config, payfast_process_url, payfast_runtime_config, valid_payfast_itn_signature
+from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_checkout_fields_for_config, payfast_process_url, payfast_runtime_config, valid_payfast_itn_signature, valid_payfast_server_confirmation
 from app.services.packages import get_package
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
@@ -215,14 +215,18 @@ def start_checkout(event_id: str, order_id: uuid.UUID, request: Request, db: Ses
 
 @app.get("/payments/payfast/return")
 def payfast_return(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
     order=db.get(PackageOrder,order_id)
-    if order is None:raise HTTPException(404)
+    if order is None or order.user_id != user.id:raise HTTPException(404)
     return RedirectResponse(f"/events/{order.event_id}/packages?payment=processing",303)
 
 @app.get("/payments/payfast/cancel")
 def payfast_cancel(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
     order=db.get(PackageOrder,order_id)
-    if order is None:raise HTTPException(404)
+    if order is None or order.user_id != user.id:raise HTTPException(404)
     if order.status=="awaiting_payment":order.status="cancelled";order.updated_at=utcnow();db.commit()
     return RedirectResponse(f"/events/{order.event_id}/packages?payment=cancelled",303)
 
@@ -231,16 +235,29 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     form=await request.form();items=[(str(k),str(v)) for k,v in form.multi_items()]
     provider=payfast_runtime_config(db)
     if provider is None:raise HTTPException(503,"Payfast is not enabled.")
-    if not valid_payfast_itn_signature(items,decrypt_secret(provider.passphrase)):raise HTTPException(400,"Invalid Payfast signature.")
+    passphrase=decrypt_secret(provider.passphrase)
+    if not valid_payfast_itn_signature(items,passphrase):raise HTTPException(400,"Invalid Payfast signature.")
     data=dict(items)
+    if data.get("merchant_id") != provider.merchant_id:raise HTTPException(400,"Payfast merchant mismatch.")
+    if not valid_payfast_server_confirmation(items,provider.is_sandbox):raise HTTPException(400,"Payfast server validation failed.")
     try:order_id=uuid.UUID(data.get("m_payment_id",""))
     except ValueError:raise HTTPException(400,"Invalid order reference.")
-    order=db.get(PackageOrder,order_id)
+    order=db.scalar(select(PackageOrder).where(PackageOrder.id==order_id).with_for_update())
     if order is None:raise HTTPException(404)
-    expected=f"{order.amount_cents/100:.2f}"
-    if data.get("amount_gross") != expected:raise HTTPException(400,"Payment amount mismatch.")
-    if data.get("payment_status")=="COMPLETE" and order.status=="awaiting_payment":
-        mark_paid(order,data.get("pf_payment_id"));event=db.get(Event,order.event_id);event.package_code=order.package_code;event.package_assigned_at=utcnow();order.status="approved";order.updated_at=utcnow();db.commit()
+    if order.provider != "payfast":raise HTTPException(400,"Payment provider mismatch.")
+    try:received_cents=round(float(data.get("amount_gross",""))*100)
+    except (TypeError,ValueError):raise HTTPException(400,"Invalid payment amount.")
+    if received_cents != order.amount_cents or order.currency != "ZAR":raise HTTPException(400,"Payment amount mismatch.")
+    if data.get("payment_status")=="COMPLETE":
+        if order.status=="approved":
+            db.commit();return Response(status_code=200)
+        if order.status!="awaiting_payment":raise HTTPException(409,"Order is not awaiting payment.")
+        package=db.get(PackageConfig,order.package_code)
+        event=db.get(Event,order.event_id)
+        if package is None or not package.is_active or event is None:raise HTTPException(409,"Package is no longer available.")
+        mark_paid(order,data.get("pf_payment_id"));event.package_code=package.code;event.package_assigned_at=utcnow();order.status="approved";order.updated_at=utcnow();db.commit()
+    else:
+        db.commit()
     return Response(status_code=200)
 
 @app.get("/events/{event_id}",response_class=HTMLResponse)
