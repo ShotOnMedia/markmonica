@@ -62,10 +62,25 @@ def payfast_checkout_fields(order: PackageOrder, event: Event, email: str, app_u
     data["signature"] = payfast_signature(data, settings.payfast_passphrase)
     return data
 
+def payfast_itn_param_string(form_items: list[tuple[str, str]]) -> str:
+    """Build Payfast's ITN parameter string in the exact posted field order.
+
+    Payfast's ITN example includes blank return fields and stops when the
+    signature field is reached. This differs from checkout signature creation.
+    """
+    parts: list[str] = []
+    for key, value in form_items:
+        if key == "signature":
+            break
+        parts.append(f"{key}={quote_plus(str(value), safe='')}")
+    return "&".join(parts)
+
 def valid_payfast_itn_signature(form_items: list[tuple[str, str]], passphrase: str | None = None) -> bool:
     supplied = next((value for key, value in form_items if key == "signature"), "")
-    data = {key: value for key, value in form_items if key != "signature"}
-    return bool(supplied) and supplied == payfast_signature(data, passphrase)
+    # Payfast's current ITN security-check example validates the returned
+    # parameter string itself; the passphrase is used for checkout signing.
+    expected = md5(payfast_itn_param_string(form_items).encode("utf-8")).hexdigest()
+    return bool(supplied) and supplied == expected
 
 
 def provider_for(code: str) -> PaymentProvider:
@@ -121,7 +136,7 @@ def payfast_validation_url(is_sandbox: bool) -> str:
     return f"https://{host}/eng/query/validate"
 
 def payfast_param_string(form_items: list[tuple[str, str]]) -> str:
-    return "&".join(f"{key}={_encoded(value)}" for key, value in form_items if key != "signature")
+    return payfast_itn_param_string(form_items)
 
 def valid_payfast_server_confirmation(form_items: list[tuple[str, str]], is_sandbox: bool, timeout: float = 10.0) -> bool:
     payload = payfast_param_string(form_items).encode("ascii")
