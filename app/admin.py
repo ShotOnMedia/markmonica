@@ -1,5 +1,7 @@
 from io import BytesIO
 from pathlib import Path
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from urllib.parse import urlparse
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -36,6 +38,24 @@ def require_admin(request: Request, db: Session) -> User:
     if user is None:
         raise HTTPException(403, "Administrator access required.")
     return user
+
+def require_same_origin(request: Request) -> None:
+    app_url = request.app.state.app_url if hasattr(request.app.state, "app_url") else None
+    if not app_url:
+        from app.settings import settings
+        app_url = settings.app_url
+    parsed = urlparse(app_url)
+    expected = f"{parsed.scheme}://{parsed.netloc}".rstrip("/") if parsed.scheme and parsed.netloc else None
+    if not expected:
+        return
+    origin = request.headers.get("origin")
+    if origin:
+        if origin.rstrip("/") != expected:
+            raise HTTPException(403, "Cross-site request rejected.")
+        return
+    referer = request.headers.get("referer")
+    if not referer or not referer.startswith(f"{expected}/"):
+        raise HTTPException(403, "Request origin could not be verified.")
 
 
 def fmt_bytes(value: int | None) -> str:
@@ -270,9 +290,12 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
     package.max_storage_bytes_per_event = parse_optional_limit(max_storage_gb, GIB)
     package.max_video_bytes = parse_optional_limit(max_video_mb, MIB)
     try:
-        package.price_cents = max(0, round(float(price_zar or "0") * 100))
-    except ValueError:
-        raise HTTPException(400, "Package price must be a valid amount.")
+        price = Decimal((price_zar or "0").strip()).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if price < 0:
+            raise InvalidOperation
+        package.price_cents = int(price * 100)
+    except (InvalidOperation, ValueError):
+        raise HTTPException(400, "Package price must be a valid non-negative amount.")
     package.currency = "ZAR"
     package.guest_gallery = guest_gallery == "on"
     package.archive_downloads = archive_downloads == "on"
@@ -340,7 +363,7 @@ def payment_settings(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/settings/payments/payfast")
 def update_payfast_settings(request: Request,is_enabled: str|None=Form(None),is_sandbox: str|None=Form(None),merchant_id: str=Form(""),merchant_key: str=Form(""),passphrase: str=Form(""),db: Session=Depends(get_db)):
-    require_admin(request,db);provider=db.get(PaymentProviderConfig,"payfast")
+    require_admin(request,db);require_same_origin(request);provider=db.get(PaymentProviderConfig,"payfast")
     if provider is None:provider=PaymentProviderConfig(code="payfast",display_name="Payfast");db.add(provider)
     provider.is_enabled=is_enabled=="on";provider.is_sandbox=is_sandbox=="on";provider.merchant_id=merchant_id.strip() or None
     if merchant_key.strip():provider.merchant_key=encrypt_secret(merchant_key.strip())
