@@ -210,7 +210,8 @@ def start_checkout(event_id: str, order_id: uuid.UUID, request: Request, db: Ses
     if provider is None:raise HTTPException(503,"Payfast checkout is not enabled.")
     begin_checkout(order,event,"manual");order.provider="payfast";order.provider_reference=str(order.id);fields=payfast_checkout_fields_for_config(order,event,user.email,settings.app_url,provider);db.commit()
     inputs="".join(f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">' for k,v in fields.items())
-    return HTMLResponse(f'<!doctype html><title>Redirecting to Payfast</title><form id="pf" method="post" action="{payfast_process_url(provider.is_sandbox)}">{inputs}</form><script>document.getElementById("pf").submit()</script>')
+    action=html.escape(payfast_process_url(provider.is_sandbox),quote=True)
+    return HTMLResponse(f'<!doctype html><html><head><meta charset="utf-8"><title>Continue to Payfast</title></head><body><main><p>Redirecting to Payfast…</p><form method="post" action="{action}">{inputs}<button type="submit">Continue to Payfast</button></form></main></body></html>')
 
 @app.get("/payments/payfast/return")
 def payfast_return(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
