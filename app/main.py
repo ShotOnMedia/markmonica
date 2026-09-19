@@ -24,7 +24,7 @@ from app.models import ArchiveJob, Event, Media, PackageConfig, PackageOrder, Us
 from app.security import hash_password, new_session, user_from_session_token, verify_password
 from app.services.archive import archive_expires_at, archive_is_expired
 from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
-from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_process_url, valid_payfast_itn_signature
+from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_checkout_fields_for_config, payfast_process_url, payfast_runtime_config, valid_payfast_itn_signature
 from app.services.packages import get_package
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
@@ -199,9 +199,9 @@ def start_checkout(event_id: str, order_id: uuid.UUID, request: Request, db: Ses
     if user is None:return RedirectResponse("/login",303)
     event=event_for_owner(db,user,event_id);order=db.get(PackageOrder,order_id)
     if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
-    begin_checkout(order,event,"payfast");fields=payfast_checkout_fields(order,event,user.email,settings.app_url);db.commit()
+    provider=payfast_runtime_config(db)\n    if provider is None:raise HTTPException(503,"Payfast checkout is not enabled.")\n    begin_checkout(order,event,"manual");order.provider="payfast";order.provider_reference=str(order.id);fields=payfast_checkout_fields_for_config(order,event,user.email,settings.app_url,provider);db.commit()
     inputs="".join(f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">' for k,v in fields.items())
-    return HTMLResponse(f'<!doctype html><title>Redirecting to Payfast</title><form id="pf" method="post" action="{payfast_process_url()}">{inputs}</form><script>document.getElementById("pf").submit()</script>')
+    return HTMLResponse(f'<!doctype html><title>Redirecting to Payfast</title><form id="pf" method="post" action="{payfast_process_url(provider.is_sandbox)}">{inputs}</form><script>document.getElementById("pf").submit()</script>')
 
 @app.get("/payments/payfast/return")
 def payfast_return(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
