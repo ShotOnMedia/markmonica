@@ -28,6 +28,7 @@ from app.services.credential_vault import decrypt_secret
 from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
 from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_checkout_fields_for_config, payfast_process_url, payfast_runtime_config, valid_payfast_itn_signature, valid_payfast_server_confirmation
 from app.services.packages import get_package
+from app.services.package_orders import lock_commercial_event, require_resolved_payments
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
 
@@ -96,6 +97,8 @@ def clean_accent_color(value):
     value=(value or "").strip()
     return value.lower() if re.fullmatch(r"#[0-9a-fA-F]{6}",value) else DEFAULT_ACCENT_COLOR
 def event_for_owner(db,user,event_id):
+    try:event_id=uuid.UUID(str(event_id))
+    except (ValueError,TypeError,AttributeError):raise HTTPException(404)
     event=db.scalar(select(Event).where(Event.id==event_id,Event.owner_id==user.id))
     if event is None:raise HTTPException(404)
     return event
@@ -178,6 +181,10 @@ def create_event(request:Request,title:str=Form(...),event_date:str=Form(""),db:
 def package_selection(event_id:str,request:Request,requested:str="",db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id)
+    outstanding=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status.in_(("awaiting_payment","paid"))).order_by(PackageOrder.created_at.desc()))
+    if outstanding:
+        return templates.TemplateResponse(request=request,name="payment_pending.html",context={"event":event,"order":outstanding})
     event=event_for_owner(db,user,event_id);packages=db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.code)).all();current=get_package(event.package_code,db=db);requested_package=next((p for p in packages if p.code==requested),None)
     return templates.TemplateResponse(request=request,name="package_select.html",context={"user":user,"event":event,"packages":packages,"current":current,"requested":requested_package})
 
@@ -185,13 +192,18 @@ def package_selection(event_id:str,request:Request,requested:str="",db:Session=D
 def package_request(event_id:str,request:Request,package_code:str=Form(...),db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
-    event=event_for_owner(db,user,event_id);package=db.get(PackageConfig,package_code)
+    event=event_for_owner(db,user,event_id)
+    event=lock_commercial_event(db,event.id)
+    require_resolved_payments(db,event.id)
+    package=db.get(PackageConfig,package_code)
     if package is None or not package.is_active:raise HTTPException(400,"This package is not available.")
     if package.code==event.package_code:return RedirectResponse(f"/events/{event.id}/packages",303)
     existing=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status=="pending").order_by(PackageOrder.created_at.desc()))
     if existing:existing.package_code=package.code;existing.amount_cents=package.price_cents;existing.currency=package.currency;existing.updated_at=utcnow()
-    else:db.add(PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="host",amount_cents=package.price_cents,currency=package.currency))
-    db.commit();order = existing if existing else db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status=="pending").order_by(PackageOrder.created_at.desc()));return RedirectResponse(f"/events/{event.id}/orders/{order.id}/checkout",303)
+    else:
+        existing=PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="host",amount_cents=package.price_cents,currency=package.currency)
+        db.add(existing)
+    db.commit();return RedirectResponse(f"/events/{event.id}/orders/{existing.id}/checkout",303)
 
 @app.get("/events/{event_id}/orders/{order_id}/checkout", response_class=HTMLResponse)
 def checkout_page(event_id: str, order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
@@ -199,6 +211,7 @@ def checkout_page(event_id: str, order_id: uuid.UUID, request: Request, db: Sess
     if user is None:return RedirectResponse("/login",303)
     event=event_for_owner(db,user,event_id);order=db.get(PackageOrder,order_id)
     if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
+    if order.status != "pending":return RedirectResponse(f"/events/{event.id}/packages",303)
     package=db.get(PackageConfig,order.package_code)
     return templates.TemplateResponse(request=request,name="checkout.html",context={"user":user,"event":event,"order":order,"package":package})
 
@@ -206,8 +219,15 @@ def checkout_page(event_id: str, order_id: uuid.UUID, request: Request, db: Sess
 def start_checkout(event_id: str, order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
-    event=event_for_owner(db,user,event_id);order=db.get(PackageOrder,order_id)
+    event=event_for_owner(db,user,event_id)
+    event=lock_commercial_event(db,event.id)
+    order=db.get(PackageOrder,order_id,populate_existing=True)
     if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
+    require_resolved_payments(db,event.id)
+    if order.status != "pending":raise HTTPException(409,"This order cannot start checkout. Please select a package again.")
+    package=db.get(PackageConfig,order.package_code)
+    if package is None or not package.is_active:raise HTTPException(409,"This package is no longer available.")
+    if order.amount_cents <= 0 or order.currency != "ZAR":raise HTTPException(400,"This package requires a valid ZAR price before checkout.")
     provider=payfast_runtime_config(db)
     if provider is None:raise HTTPException(503,"Payfast checkout is not enabled.")
     order.provider="payfast";order.provider_reference=str(order.id);order.status="awaiting_payment";order.updated_at=utcnow();fields=payfast_checkout_fields_for_config(order,event,user.email,settings.app_url,provider);db.commit()
@@ -229,7 +249,7 @@ def payfast_cancel(order_id: uuid.UUID, request: Request, db: Session = Depends(
     if user is None:return RedirectResponse("/login",303)
     order=db.get(PackageOrder,order_id)
     if order is None or order.user_id != user.id:raise HTTPException(404)
-    if order.status=="awaiting_payment":order.status="cancelled";order.updated_at=utcnow();db.commit()
+    # Browser navigation is advisory; a delayed verified ITN remains authoritative.
     return RedirectResponse(f"/events/{order.event_id}/packages?payment=cancelled",303)
 
 @app.post("/payments/payfast/notify")
@@ -258,7 +278,10 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     except ValueError:
         logger.warning("Payfast ITN rejected order=%s check=order_reference",order_ref)
         raise HTTPException(400,"Invalid order reference.")
-    order=db.scalar(select(PackageOrder).where(PackageOrder.id==order_id).with_for_update())
+    order=db.get(PackageOrder,order_id)
+    if order is None:raise HTTPException(404)
+    lock_commercial_event(db,order.event_id)
+    order=db.scalar(select(PackageOrder).where(PackageOrder.id==order_id).with_for_update().execution_options(populate_existing=True))
     if order is None:
         logger.warning("Payfast ITN rejected order=%s check=order_lookup",order_ref)
         raise HTTPException(404)

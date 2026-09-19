@@ -16,6 +16,7 @@ from app.models import BrandingSettings, Event, Media, PackageConfig, PackageOrd
 from app.security import user_from_session_token
 from app.services.credential_vault import encrypt_secret
 from app.services.storage import delete_objects, upload_fileobj
+from app.services.package_orders import lock_commercial_event, require_resolved_payments
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -230,9 +231,9 @@ def event_status(event_id: uuid.UUID, request: Request, status: str = Form(...),
 @router.post("/events/{event_id}/package")
 def event_package(event_id: uuid.UUID, request: Request, package_code: str = Form(...), db: Session = Depends(get_db)):
     require_admin(request, db)
-    event = db.get(Event, event_id)
-    if event is None:
-        raise HTTPException(404)
+    require_same_origin(request)
+    event = lock_commercial_event(db, event_id)
+    require_resolved_payments(db, event_id)
     package = db.get(PackageConfig, package_code)
     if package is None or not package.is_active:
         raise HTTPException(400, "Invalid or inactive package.")
@@ -322,9 +323,13 @@ def package_requests(request: Request, status: str = "", db: Session = Depends(g
 @router.post("/package-requests/{order_id}/approve")
 def approve_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
     require_admin(request, db)
+    require_same_origin(request)
     order = db.get(PackageOrder, order_id)
     if order is None:
         raise HTTPException(404)
+    lock_commercial_event(db, order.event_id)
+    db.refresh(order)
+    require_resolved_payments(db, order.event_id)
     if order.status != "pending":
         raise HTTPException(409, "This package request is no longer pending.")
     package = db.get(PackageConfig, order.package_code)
@@ -344,9 +349,12 @@ def approve_package_request(order_id: uuid.UUID, request: Request, db: Session =
 @router.post("/package-requests/{order_id}/cancel")
 def cancel_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
     require_admin(request, db)
+    require_same_origin(request)
     order = db.get(PackageOrder, order_id)
     if order is None:
         raise HTTPException(404)
+    lock_commercial_event(db, order.event_id)
+    db.refresh(order)
     if order.status != "pending":
         raise HTTPException(409, "This package request is no longer pending.")
     order.status = "cancelled"
