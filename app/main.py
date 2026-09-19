@@ -58,7 +58,7 @@ app=FastAPI(title=settings.app_name,version=__version__,lifespan=lifespan); app.
 @app.middleware("http")
 async def security_headers(request,call_next):
     response=await call_next(request); storage=f" {STORAGE_ORIGIN}" if STORAGE_ORIGIN else ""
-    response.headers.setdefault("X-Content-Type-Options","nosniff"); response.headers.setdefault("X-Frame-Options","DENY"); response.headers.setdefault("Referrer-Policy","strict-origin-when-cross-origin"); response.headers.setdefault("Permissions-Policy","camera=(), microphone=(), geolocation=()"); response.headers.setdefault("Content-Security-Policy","default-src 'self'; "+f"img-src 'self' data:{storage}; "+f"media-src 'self'{storage}; "+f"connect-src 'self'{storage}; "+"style-src 'self' https://fonts.googleapis.com; script-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+    response.headers.setdefault("X-Content-Type-Options","nosniff"); response.headers.setdefault("X-Frame-Options","DENY"); response.headers.setdefault("Referrer-Policy","strict-origin-when-cross-origin"); response.headers.setdefault("Permissions-Policy","camera=(), microphone=(), geolocation=()"); response.headers.setdefault("Content-Security-Policy","default-src 'self'; "+f"img-src 'self' data:{storage}; "+f"media-src 'self'{storage}; "+f"connect-src 'self'{storage}; "+"style-src 'self' https://fonts.googleapis.com; script-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://sandbox.payfast.co.za https://www.payfast.co.za")
     if COOKIE_SECURE: response.headers.setdefault("Strict-Transport-Security","max-age=31536000; includeSubDomains")
     return response
 
