@@ -12,6 +12,7 @@ from app.branding import DEFAULTS as BRAND_DEFAULTS, FONT_MAP, valid_hex
 from app.db import get_db
 from app.models import BrandingSettings, Event, Media, PackageConfig, PackageOrder, PaymentProviderConfig, User, utcnow
 from app.security import user_from_session_token
+from app.services.credential_vault import encrypt_secret
 from app.services.storage import delete_objects, upload_fileobj
 
 BASE_DIR = Path(__file__).resolve().parent.parent
