@@ -48,10 +48,10 @@ def test_payfast_param_string_preserves_itn_order_and_stops_at_signature():
     items = [("m_payment_id", "order 1"), ("item_description", ""), ("amount_gross", "500.00"), ("signature", "abc"), ("ignored", "after")]
     assert payfast_param_string(items) == "m_payment_id=order+1&item_description=&amount_gross=500.00"
 
-def test_payfast_itn_signature_uses_return_parameter_string_without_passphrase():
+def test_payfast_itn_signature_uses_return_parameter_string_with_passphrase():
     import hashlib
     items = [("m_payment_id", "order 1"), ("item_description", ""), ("amount_gross", "500.00")]
-    param = "m_payment_id=order+1&item_description=&amount_gross=500.00"
+    param = "m_payment_id=order+1&item_description=&amount_gross=500.00&passphrase=checkout-passphrase"
     items.append(("signature", hashlib.md5(param.encode("utf-8")).hexdigest()))
     assert valid_payfast_itn_signature(items, "checkout-passphrase")
 
