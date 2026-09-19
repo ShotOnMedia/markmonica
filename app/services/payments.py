@@ -61,10 +61,10 @@ def payfast_checkout_fields(order: PackageOrder, event: Event, email: str, app_u
     data["signature"] = payfast_signature(data, settings.payfast_passphrase)
     return data
 
-def valid_payfast_itn_signature(form_items: list[tuple[str, str]]) -> bool:
+def valid_payfast_itn_signature(form_items: list[tuple[str, str]], passphrase: str | None = None) -> bool:
     supplied = next((value for key, value in form_items if key == "signature"), "")
     data = {key: value for key, value in form_items if key != "signature"}
-    return bool(supplied) and supplied == payfast_signature(data, settings.payfast_passphrase)
+    return bool(supplied) and supplied == payfast_signature(data, passphrase)
 
 
 def provider_for(code: str) -> PaymentProvider:
