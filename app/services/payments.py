@@ -77,9 +77,10 @@ def payfast_itn_param_string(form_items: list[tuple[str, str]]) -> str:
 
 def valid_payfast_itn_signature(form_items: list[tuple[str, str]], passphrase: str | None = None) -> bool:
     supplied = next((value for key, value in form_items if key == "signature"), "")
-    # Payfast's current ITN security-check example validates the returned
-    # parameter string itself; the passphrase is used for checkout signing.
-    expected = md5(payfast_itn_param_string(form_items).encode("utf-8")).hexdigest()
+    param_string = payfast_itn_param_string(form_items)
+    if passphrase:
+        param_string += f"&passphrase={_encoded(passphrase)}"
+    expected = md5(param_string.encode("utf-8")).hexdigest()
     return bool(supplied) and supplied == expected
 
 
