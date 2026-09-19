@@ -1,9 +1,10 @@
 from cryptography.fernet import Fernet, InvalidToken
+from functools import lru_cache
 from app.settings import settings
 
 PREFIX = "enc:v1:"
 
-def _fernet() -> Fernet:
+@lru_cache\ndef _fernet() -> Fernet:
     if not settings.payment_credentials_encryption_key:
         raise RuntimeError("PAYMENT_CREDENTIALS_ENCRYPTION_KEY is not configured.")
     return Fernet(settings.payment_credentials_encryption_key.encode("ascii"))
