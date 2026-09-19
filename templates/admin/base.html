@@ -22,6 +22,7 @@
       <a class="{{ 'active' if section == 'branding' else '' }}" href="/admin/branding">Branding</a>
       <a class="{{ 'active' if section == 'analytics' else '' }}" href="/admin/analytics">Analytics</a>
       <a class="{{ 'active' if section == 'activity' else '' }}" href="/admin/activity">Activity log</a>
+      <div class="admin-nav-group"><span class="admin-nav-label">Settings</span><a class="{{ 'active' if section == 'payment_settings' else '' }}" href="/admin/settings/payments">Payment providers</a></div>
       <a class="{{ 'active' if section == 'system' else '' }}" href="/admin/system">System</a>
     </nav>
     <div class="admin-sidebar-foot"><strong>{{ admin.display_name }}</strong><span>{{ admin.email }}</span><a href="/dashboard">Host dashboard →</a></div>
