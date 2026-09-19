@@ -101,6 +101,8 @@ class PackageConfig(Base):
     archive_downloads: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     custom_event_design: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    price_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 class BrandingSettings(Base):
@@ -140,6 +142,8 @@ class PackageOrder(Base):
     source: Mapped[str] = mapped_column(String(32), default="host", nullable=False)
     provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
     provider_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
     event: Mapped[Event] = relationship(back_populates="package_orders")
