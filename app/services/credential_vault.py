@@ -4,7 +4,8 @@ from app.settings import settings
 
 PREFIX = "enc:v1:"
 
-@lru_cache\ndef _fernet() -> Fernet:
+@lru_cache
+def _fernet() -> Fernet:
     if not settings.payment_credentials_encryption_key:
         raise RuntimeError("PAYMENT_CREDENTIALS_ENCRYPTION_KEY is not configured.")
     return Fernet(settings.payment_credentials_encryption_key.encode("ascii"))
