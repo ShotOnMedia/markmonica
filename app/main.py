@@ -3,7 +3,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
-import hashlib, json, re, secrets, time, uuid
+import hashlib, html, json, re, secrets, time, uuid
 
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -20,10 +20,12 @@ from sqlalchemy.orm import Session
 
 from app import __version__
 from app.db import engine, get_db
-from app.models import ArchiveJob, Event, Media, User, UserSession, utcnow
+from app.models import ArchiveJob, Event, Media, PackageConfig, PackageOrder, User, UserSession, utcnow
 from app.security import hash_password, new_session, user_from_session_token, verify_password
 from app.services.archive import archive_expires_at, archive_is_expired
+from app.services.credential_vault import decrypt_secret
 from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
+from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_checkout_fields_for_config, payfast_process_url, payfast_runtime_config, valid_payfast_itn_signature
 from app.services.packages import get_package
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
@@ -164,6 +166,76 @@ def create_event(request:Request,title:str=Form(...),event_date:str=Form(""),db:
     try:parsed_date=date.fromisoformat(event_date) if event_date else None
     except ValueError:parsed_date=None
     event=Event(owner_id=user.id,title=title,event_date=parsed_date,slug=f"{slugify(title)}-{secrets.token_hex(3)}");db.add(event);db.commit();db.refresh(event);return RedirectResponse(f"/events/{event.id}",303)
+@app.get("/events/{event_id}/packages",response_class=HTMLResponse)
+def package_selection(event_id:str,request:Request,requested:str="",db:Session=Depends(get_db)):
+    user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);packages=db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.code)).all();current=get_package(event.package_code,db=db);requested_package=next((p for p in packages if p.code==requested),None)
+    return templates.TemplateResponse(request=request,name="package_select.html",context={"user":user,"event":event,"packages":packages,"current":current,"requested":requested_package})
+
+@app.post("/events/{event_id}/package-request")
+def package_request(event_id:str,request:Request,package_code:str=Form(...),db:Session=Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);package=db.get(PackageConfig,package_code)
+    if package is None or not package.is_active:raise HTTPException(400,"This package is not available.")
+    if package.code==event.package_code:return RedirectResponse(f"/events/{event.id}/packages",303)
+    existing=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status=="pending").order_by(PackageOrder.created_at.desc()))
+    if existing:existing.package_code=package.code;existing.amount_cents=package.price_cents;existing.currency=package.currency;existing.updated_at=utcnow()
+    else:db.add(PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="host",amount_cents=package.price_cents,currency=package.currency))
+    db.commit();order = existing if existing else db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status=="pending").order_by(PackageOrder.created_at.desc()));return RedirectResponse(f"/events/{event.id}/orders/{order.id}/checkout",303)
+
+@app.get("/events/{event_id}/orders/{order_id}/checkout", response_class=HTMLResponse)
+def checkout_page(event_id: str, order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);order=db.get(PackageOrder,order_id)
+    if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
+    package=db.get(PackageConfig,order.package_code)
+    return templates.TemplateResponse(request=request,name="checkout.html",context={"user":user,"event":event,"order":order,"package":package})
+
+@app.post("/events/{event_id}/orders/{order_id}/checkout")
+def start_checkout(event_id: str, order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);order=db.get(PackageOrder,order_id)
+    if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
+    provider=payfast_runtime_config(db)
+    if provider is None:raise HTTPException(503,"Payfast checkout is not enabled.")
+    begin_checkout(order,event,"manual");order.provider="payfast";order.provider_reference=str(order.id);fields=payfast_checkout_fields_for_config(order,event,user.email,settings.app_url,provider);db.commit()
+    inputs="".join(f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">' for k,v in fields.items())
+    return HTMLResponse(f'<!doctype html><title>Redirecting to Payfast</title><form id="pf" method="post" action="{payfast_process_url(provider.is_sandbox)}">{inputs}</form><script>document.getElementById("pf").submit()</script>')
+
+@app.get("/payments/payfast/return")
+def payfast_return(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    order=db.get(PackageOrder,order_id)
+    if order is None:raise HTTPException(404)
+    return RedirectResponse(f"/events/{order.event_id}/packages?payment=processing",303)
+
+@app.get("/payments/payfast/cancel")
+def payfast_cancel(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    order=db.get(PackageOrder,order_id)
+    if order is None:raise HTTPException(404)
+    if order.status=="awaiting_payment":order.status="cancelled";order.updated_at=utcnow();db.commit()
+    return RedirectResponse(f"/events/{order.event_id}/packages?payment=cancelled",303)
+
+@app.post("/payments/payfast/notify")
+async def payfast_notify(request: Request, db: Session = Depends(get_db)):
+    form=await request.form();items=[(str(k),str(v)) for k,v in form.multi_items()]
+    provider=payfast_runtime_config(db)
+    if provider is None:raise HTTPException(503,"Payfast is not enabled.")
+    if not valid_payfast_itn_signature(items,decrypt_secret(provider.passphrase)):raise HTTPException(400,"Invalid Payfast signature.")
+    data=dict(items)
+    try:order_id=uuid.UUID(data.get("m_payment_id",""))
+    except ValueError:raise HTTPException(400,"Invalid order reference.")
+    order=db.get(PackageOrder,order_id)
+    if order is None:raise HTTPException(404)
+    expected=f"{order.amount_cents/100:.2f}"
+    if data.get("amount_gross") != expected:raise HTTPException(400,"Payment amount mismatch.")
+    if data.get("payment_status")=="COMPLETE" and order.status=="awaiting_payment":
+        mark_paid(order,data.get("pf_payment_id"));event=db.get(Event,order.event_id);event.package_code=order.package_code;event.package_assigned_at=utcnow();order.status="approved";order.updated_at=utcnow();db.commit()
+    return Response(status_code=200)
+
 @app.get("/events/{event_id}",response_class=HTMLResponse)
 def manage_event(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)

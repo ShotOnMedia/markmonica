@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.branding import DEFAULTS as BRAND_DEFAULTS, FONT_MAP, valid_hex
 from app.db import get_db
-from app.models import BrandingSettings, Event, Media, PackageConfig, User
+from app.models import BrandingSettings, Event, Media, PackageConfig, PackageOrder, PaymentProviderConfig, User, utcnow
 from app.security import user_from_session_token
 from app.services.storage import delete_objects, upload_fileobj
 
@@ -256,7 +256,7 @@ def packages(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/packages/{code}")
-def update_package(code: str, request: Request, name: str = Form(...), max_media_per_event: str = Form(""), max_storage_gb: str = Form(""), max_video_mb: str = Form(""), guest_gallery: str | None = Form(None), archive_downloads: str | None = Form(None), custom_event_design: str | None = Form(None), is_active: str | None = Form(None), db: Session = Depends(get_db)):
+def update_package(code: str, request: Request, name: str = Form(...), max_media_per_event: str = Form(""), max_storage_gb: str = Form(""), max_video_mb: str = Form(""), price_zar: str = Form("0"), guest_gallery: str | None = Form(None), archive_downloads: str | None = Form(None), custom_event_design: str | None = Form(None), is_active: str | None = Form(None), db: Session = Depends(get_db)):
     require_admin(request, db)
     package = db.get(PackageConfig, code)
     if package is None:
@@ -268,6 +268,11 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
     package.max_media_per_event = parse_optional_limit(max_media_per_event)
     package.max_storage_bytes_per_event = parse_optional_limit(max_storage_gb, GIB)
     package.max_video_bytes = parse_optional_limit(max_video_mb, MIB)
+    try:
+        package.price_cents = max(0, round(float(price_zar or "0") * 100))
+    except ValueError:
+        raise HTTPException(400, "Package price must be a valid amount.")
+    package.currency = "ZAR"
     package.guest_gallery = guest_gallery == "on"
     package.archive_downloads = archive_downloads == "on"
     package.custom_event_design = custom_event_design == "on"
@@ -279,6 +284,67 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
     db.commit()
     return RedirectResponse("/admin/packages", status_code=303)
 
+
+@router.get("/package-requests", response_class=HTMLResponse)
+def package_requests(request: Request, status: str = "", db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    stmt = select(PackageOrder).order_by(PackageOrder.created_at.desc())
+    if status in {"pending", "awaiting_payment", "paid", "approved", "failed", "cancelled"}:
+        stmt = stmt.where(PackageOrder.status == status)
+    orders = db.scalars(stmt.limit(250)).all()
+    return templates.TemplateResponse(request=request, name="admin/package_requests.html", context={"admin": admin, "section": "package_requests", "orders": orders, "status": status})
+
+
+@router.post("/package-requests/{order_id}/approve")
+def approve_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    order = db.get(PackageOrder, order_id)
+    if order is None:
+        raise HTTPException(404)
+    if order.status != "pending":
+        raise HTTPException(409, "This package request is no longer pending.")
+    package = db.get(PackageConfig, order.package_code)
+    if package is None or not package.is_active:
+        raise HTTPException(400, "The requested package is no longer available.")
+    event = db.get(Event, order.event_id)
+    if event is None:
+        raise HTTPException(404)
+    event.package_code = package.code
+    event.package_assigned_at = utcnow()
+    order.status = "approved"
+    order.updated_at = utcnow()
+    db.commit()
+    return RedirectResponse("/admin/package-requests?status=pending", status_code=303)
+
+
+@router.post("/package-requests/{order_id}/cancel")
+def cancel_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    require_admin(request, db)
+    order = db.get(PackageOrder, order_id)
+    if order is None:
+        raise HTTPException(404)
+    if order.status != "pending":
+        raise HTTPException(409, "This package request is no longer pending.")
+    order.status = "cancelled"
+    order.updated_at = utcnow()
+    db.commit()
+    return RedirectResponse("/admin/package-requests?status=pending", status_code=303)
+
+
+@router.get("/settings/payments", response_class=HTMLResponse)
+def payment_settings(request: Request, db: Session = Depends(get_db)):
+    admin=require_admin(request,db);provider=db.get(PaymentProviderConfig,"payfast")
+    if provider is None:provider=PaymentProviderConfig(code="payfast",display_name="Payfast");db.add(provider);db.commit();db.refresh(provider)
+    return templates.TemplateResponse(request=request,name="admin/payment_settings.html",context={"admin":admin,"section":"payment_settings","provider":provider})
+
+@router.post("/settings/payments/payfast")
+def update_payfast_settings(request: Request,is_enabled: str|None=Form(None),is_sandbox: str|None=Form(None),merchant_id: str=Form(""),merchant_key: str=Form(""),passphrase: str=Form(""),db: Session=Depends(get_db)):
+    require_admin(request,db);provider=db.get(PaymentProviderConfig,"payfast")
+    if provider is None:provider=PaymentProviderConfig(code="payfast",display_name="Payfast");db.add(provider)
+    provider.is_enabled=is_enabled=="on";provider.is_sandbox=is_sandbox=="on";provider.merchant_id=merchant_id.strip() or None
+    if merchant_key.strip():provider.merchant_key=encrypt_secret(merchant_key.strip())
+    if passphrase.strip():provider.passphrase=encrypt_secret(passphrase.strip())
+    provider.updated_at=utcnow();db.commit();return RedirectResponse("/admin/settings/payments",303)
 
 @router.get("/branding", response_class=HTMLResponse)
 def branding(request: Request, db: Session = Depends(get_db)):

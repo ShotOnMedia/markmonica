@@ -55,6 +55,7 @@ class Event(Base):
     owner: Mapped[User] = relationship(back_populates="events")
     media: Mapped[list["Media"]] = relationship(back_populates="event", cascade="all, delete-orphan")
     archive_jobs: Mapped[list["ArchiveJob"]] = relationship(back_populates="event", cascade="all, delete-orphan")
+    package_orders: Mapped[list["PackageOrder"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
 class Media(Base):
     __tablename__ = "media"
@@ -100,6 +101,8 @@ class PackageConfig(Base):
     archive_downloads: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     custom_event_design: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    price_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 class BrandingSettings(Base):
@@ -127,3 +130,33 @@ class AdminActivity(Base):
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
     admin_user: Mapped[User | None] = relationship()
+
+
+class PackageOrder(Base):
+    __tablename__ = "package_orders"
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    package_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="host", nullable=False)
+    provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+    event: Mapped[Event] = relationship(back_populates="package_orders")
+    user: Mapped[User] = relationship()
+
+
+class PaymentProviderConfig(Base):
+    __tablename__ = "payment_provider_configs"
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_sandbox: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    merchant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    merchant_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    passphrase: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
