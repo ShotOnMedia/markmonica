@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.branding import DEFAULTS as BRAND_DEFAULTS, FONT_MAP, valid_hex
 from app.db import get_db
-from app.models import BrandingSettings, Event, Media, PackageConfig, PackageOrder, User, utcnow
+from app.models import BrandingSettings, Event, Media, PackageConfig, PackageOrder, PaymentProviderConfig, User, utcnow
 from app.security import user_from_session_token
 from app.services.storage import delete_objects, upload_fileobj
 
@@ -330,6 +330,20 @@ def cancel_package_request(order_id: uuid.UUID, request: Request, db: Session = 
     db.commit()
     return RedirectResponse("/admin/package-requests?status=pending", status_code=303)
 
+
+@router.get("/settings/payments", response_class=HTMLResponse)
+def payment_settings(request: Request, db: Session = Depends(get_db)):
+    admin=require_admin(request,db);provider=db.get(PaymentProviderConfig,"payfast")
+    if provider is None:provider=PaymentProviderConfig(code="payfast",display_name="Payfast");db.add(provider);db.commit();db.refresh(provider)
+    return templates.TemplateResponse(request=request,name="admin/payment_settings.html",context={"admin":admin,"section":"payment_settings","provider":provider})
+
+@router.post("/settings/payments/payfast")
+def update_payfast_settings(request: Request,is_enabled: str|None=Form(None),is_sandbox: str|None=Form(None),merchant_id: str=Form(""),merchant_key: str=Form(""),passphrase: str=Form(""),db: Session=Depends(get_db)):
+    require_admin(request,db);provider=db.get(PaymentProviderConfig,"payfast")
+    if provider is None:provider=PaymentProviderConfig(code="payfast",display_name="Payfast");db.add(provider)
+    provider.is_enabled=is_enabled=="on";provider.is_sandbox=is_sandbox=="on";provider.merchant_id=merchant_id.strip() or None;provider.merchant_key=merchant_key.strip() or None
+    if passphrase.strip():provider.passphrase=passphrase.strip()
+    provider.updated_at=utcnow();db.commit();return RedirectResponse("/admin/settings/payments",303)
 
 @router.get("/branding", response_class=HTMLResponse)
 def branding(request: Request, db: Session = Depends(get_db)):
