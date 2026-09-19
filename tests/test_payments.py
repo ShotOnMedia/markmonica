@@ -4,7 +4,7 @@ from datetime import date
 import pytest
 
 from app.models import Event, PackageOrder
-from app.services.payments import begin_checkout, mark_failed, mark_paid, payfast_param_string, payfast_validation_url
+from app.services.payments import begin_checkout, mark_failed, mark_paid, payfast_param_string, payfast_validation_url, valid_payfast_itn_signature
 
 
 def make_order(status="pending"):
@@ -44,9 +44,16 @@ def test_approved_order_cannot_restart_checkout():
         begin_checkout(make_order("approved"), make_event())
 
 
-def test_payfast_param_string_preserves_itn_order_and_omits_signature():
-    items = [("m_payment_id", "order 1"), ("amount_gross", "500.00"), ("signature", "abc")]
-    assert payfast_param_string(items) == "m_payment_id=order+1&amount_gross=500.00"
+def test_payfast_param_string_preserves_itn_order_and_stops_at_signature():
+    items = [("m_payment_id", "order 1"), ("item_description", ""), ("amount_gross", "500.00"), ("signature", "abc"), ("ignored", "after")]
+    assert payfast_param_string(items) == "m_payment_id=order+1&item_description=&amount_gross=500.00"
+
+def test_payfast_itn_signature_uses_return_parameter_string_without_passphrase():
+    import hashlib
+    items = [("m_payment_id", "order 1"), ("item_description", ""), ("amount_gross", "500.00")]
+    param = "m_payment_id=order+1&item_description=&amount_gross=500.00"
+    items.append(("signature", hashlib.md5(param.encode("utf-8")).hexdigest()))
+    assert valid_payfast_itn_signature(items, "checkout-passphrase")
 
 def test_payfast_validation_urls_are_environment_specific():
     assert payfast_validation_url(True) == "https://sandbox.payfast.co.za/eng/query/validate"
