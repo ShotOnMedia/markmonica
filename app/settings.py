@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     archive_cleanup_interval_seconds: int = 900
     archive_stale_job_hours: int = 6
     worker_queue: str = "markmonica:jobs"
+    payfast_sandbox: bool = True
+    payfast_merchant_id: str | None = None
+    payfast_merchant_key: str | None = None
+    payfast_passphrase: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
