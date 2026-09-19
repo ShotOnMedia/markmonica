@@ -24,6 +24,7 @@ from app.models import ArchiveJob, Event, Media, PackageConfig, PackageOrder, Us
 from app.security import hash_password, new_session, user_from_session_token, verify_password
 from app.services.archive import archive_expires_at, archive_is_expired
 from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
+from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_process_url, valid_payfast_itn_signature
 from app.services.packages import get_package
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
@@ -182,6 +183,53 @@ def package_request(event_id:str,request:Request,package_code:str=Form(...),db:S
     if existing:existing.package_code=package.code;existing.amount_cents=package.price_cents;existing.currency=package.currency;existing.updated_at=utcnow()
     else:db.add(PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="host",amount_cents=package.price_cents,currency=package.currency))
     db.commit();return RedirectResponse(f"/events/{event.id}/packages?requested={package.code}",303)
+
+@app.get("/events/{event_id}/orders/{order_id}/checkout", response_class=HTMLResponse)
+def checkout_page(event_id: str, order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);order=db.get(PackageOrder,order_id)
+    if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
+    package=db.get(PackageConfig,order.package_code)
+    return templates.TemplateResponse(request=request,name="checkout.html",context={"user":user,"event":event,"order":order,"package":package})
+
+@app.post("/events/{event_id}/orders/{order_id}/checkout")
+def start_checkout(event_id: str, order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id);order=db.get(PackageOrder,order_id)
+    if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
+    begin_checkout(order,event,"payfast");fields=payfast_checkout_fields(order,event,user.email,settings.app_url);db.commit()
+    inputs="".join(f'<input type="hidden" name="{html.escape(k)}" value="{html.escape(v)}">' for k,v in fields.items())
+    return HTMLResponse(f'<!doctype html><title>Redirecting to Payfast</title><form id="pf" method="post" action="{payfast_process_url()}">{inputs}</form><script>document.getElementById("pf").submit()</script>')
+
+@app.get("/payments/payfast/return")
+def payfast_return(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    order=db.get(PackageOrder,order_id)
+    if order is None:raise HTTPException(404)
+    return RedirectResponse(f"/events/{order.event_id}/packages?payment=processing",303)
+
+@app.get("/payments/payfast/cancel")
+def payfast_cancel(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    order=db.get(PackageOrder,order_id)
+    if order is None:raise HTTPException(404)
+    if order.status=="awaiting_payment":order.status="cancelled";order.updated_at=utcnow();db.commit()
+    return RedirectResponse(f"/events/{order.event_id}/packages?payment=cancelled",303)
+
+@app.post("/payments/payfast/notify")
+async def payfast_notify(request: Request, db: Session = Depends(get_db)):
+    form=await request.form();items=[(str(k),str(v)) for k,v in form.multi_items()]
+    if not valid_payfast_itn_signature(items):raise HTTPException(400,"Invalid Payfast signature.")
+    data=dict(items)
+    try:order_id=uuid.UUID(data.get("m_payment_id",""))
+    except ValueError:raise HTTPException(400,"Invalid order reference.")
+    order=db.get(PackageOrder,order_id)
+    if order is None:raise HTTPException(404)
+    expected=f"{order.amount_cents/100:.2f}"
+    if data.get("amount_gross") != expected:raise HTTPException(400,"Payment amount mismatch.")
+    if data.get("payment_status")=="COMPLETE" and order.status=="awaiting_payment":
+        mark_paid(order,data.get("pf_payment_id"));event=db.get(Event,order.event_id);event.package_code=order.package_code;event.package_assigned_at=utcnow();order.status="approved";order.updated_at=utcnow();db.commit()
+    return Response(status_code=200)
 
 @app.get("/events/{event_id}",response_class=HTMLResponse)
 def manage_event(event_id:str,request:Request,db:Session=Depends(get_db)):
