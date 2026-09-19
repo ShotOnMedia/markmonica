@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol
 from hashlib import md5
 from urllib.parse import quote_plus
@@ -58,7 +59,7 @@ def payfast_checkout_fields(order: PackageOrder, event: Event, email: str, app_u
     if not settings.payfast_merchant_id or not settings.payfast_merchant_key:
         raise ValueError("Payfast merchant credentials are not configured.")
     base = app_url.rstrip("/")
-    data = {"merchant_id": settings.payfast_merchant_id, "merchant_key": settings.payfast_merchant_key, "return_url": f"{base}/payments/payfast/return?order_id={order.id}", "cancel_url": f"{base}/payments/payfast/cancel?order_id={order.id}", "notify_url": f"{base}/payments/payfast/notify", "email_address": email, "m_payment_id": str(order.id), "amount": f"{order.amount_cents / 100:.2f}", "item_name": f"Memories Events - {order.package_code.title()} package"}
+    data = {"merchant_id": settings.payfast_merchant_id, "merchant_key": settings.payfast_merchant_key, "return_url": f"{base}/payments/payfast/return?order_id={order.id}", "cancel_url": f"{base}/payments/payfast/cancel?order_id={order.id}", "notify_url": f"{base}/payments/payfast/notify", "email_address": email, "m_payment_id": str(order.id), "amount": f"{Decimal(order.amount_cents) / Decimal(100):.2f}", "item_name": f"Memories Events - {order.package_code.title()} package"}
     data["signature"] = payfast_signature(data, settings.payfast_passphrase)
     return data
 
@@ -127,7 +128,7 @@ def payfast_checkout_fields_for_config(order: PackageOrder, event: Event, email:
     base=app_url.rstrip("/")
     merchant_key=decrypt_secret(provider.merchant_key)
     passphrase=decrypt_secret(provider.passphrase)
-    data={"merchant_id":provider.merchant_id,"merchant_key":merchant_key,"return_url":f"{base}/payments/payfast/return?order_id={order.id}","cancel_url":f"{base}/payments/payfast/cancel?order_id={order.id}","notify_url":f"{base}/payments/payfast/notify","email_address":email,"m_payment_id":str(order.id),"amount":f"{order.amount_cents/100:.2f}","item_name":f"Memories Events - {order.package_code.title()} package"}
+    data={"merchant_id":provider.merchant_id,"merchant_key":merchant_key,"return_url":f"{base}/payments/payfast/return?order_id={order.id}","cancel_url":f"{base}/payments/payfast/cancel?order_id={order.id}","notify_url":f"{base}/payments/payfast/notify","email_address":email,"m_payment_id":str(order.id),"amount":f"{Decimal(order.amount_cents) / Decimal(100):.2f}","item_name":f"Memories Events - {order.package_code.title()} package"}
     data["signature"]=payfast_signature(data,passphrase)
     return data
 
