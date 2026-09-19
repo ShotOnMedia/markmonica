@@ -1,7 +1,7 @@
 {% extends "admin/base.html" %}
 {% block title %}Packages{% endblock %}{% block heading %}Packages{% endblock %}
 {% block content %}
-<section class="panel"><span class="eyebrow">Commercial foundation</span><h2>Package definitions</h2><p class="muted-copy">Manage the limits and capabilities used for event packages. Leave a numeric limit blank for unlimited. Changes here do not yet enforce uploads; enforcement is the next product layer.</p></section>
+<section class="panel"><span class="eyebrow">Commercial foundation</span><h2>Package definitions</h2><p class="muted-copy">Manage the limits and capabilities used for event packages. Leave a numeric limit blank for unlimited. These limits and capabilities are enforced for assigned events. Host package requests remain pending until an administrator or future payment provider completes the assignment.</p></section>
 <div class="package-grid">
 {% for package in packages %}{% set u = usage.get(package.code, {'events':0,'media':0,'storage':0}) %}
 <section class="panel package-card">
