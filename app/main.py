@@ -3,7 +3,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlparse
-import hashlib, html, json, re, secrets, time, uuid
+import hashlib, html, json, logging, re, secrets, time, uuid
 
 from botocore.exceptions import ClientError
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -31,6 +31,7 @@ from app.services.storage import bucket_is_ready, create_presigned_download, cre
 from app.settings import settings
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates")); SESSION_COOKIE = "markmonica_session"
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"}; ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/x-m4v", "video/webm"}
 ALLOWED_COVER_TYPES={"image/jpeg","image/png","image/webp"}; MAX_COVER_BYTES=15*1024*1024
