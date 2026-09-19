@@ -233,30 +233,60 @@ def payfast_cancel(order_id: uuid.UUID, request: Request, db: Session = Depends(
 @app.post("/payments/payfast/notify")
 async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     form=await request.form();items=[(str(k),str(v)) for k,v in form.multi_items()]
+    data=dict(items);order_ref=data.get("m_payment_id","missing")
+    logger.info("Payfast ITN received order=%s status=%s",order_ref,data.get("payment_status","missing"))
     provider=payfast_runtime_config(db)
-    if provider is None:raise HTTPException(503,"Payfast is not enabled.")
+    if provider is None:
+        logger.warning("Payfast ITN rejected order=%s check=provider_config",order_ref)
+        raise HTTPException(503,"Payfast is not enabled.")
     passphrase=decrypt_secret(provider.passphrase)
-    if not valid_payfast_itn_signature(items,passphrase):raise HTTPException(400,"Invalid Payfast signature.")
-    data=dict(items)
-    if data.get("merchant_id") != provider.merchant_id:raise HTTPException(400,"Payfast merchant mismatch.")
-    if not valid_payfast_server_confirmation(items,provider.is_sandbox):raise HTTPException(400,"Payfast server validation failed.")
-    try:order_id=uuid.UUID(data.get("m_payment_id",""))
-    except ValueError:raise HTTPException(400,"Invalid order reference.")
+    if not valid_payfast_itn_signature(items,passphrase):
+        logger.warning("Payfast ITN rejected order=%s check=signature",order_ref)
+        raise HTTPException(400,"Invalid Payfast signature.")
+    logger.info("Payfast ITN check passed order=%s check=signature",order_ref)
+    if data.get("merchant_id") != provider.merchant_id:
+        logger.warning("Payfast ITN rejected order=%s check=merchant_id",order_ref)
+        raise HTTPException(400,"Payfast merchant mismatch.")
+    logger.info("Payfast ITN check passed order=%s check=merchant_id",order_ref)
+    if not valid_payfast_server_confirmation(items,provider.is_sandbox):
+        logger.warning("Payfast ITN rejected order=%s check=server_validation sandbox=%s",order_ref,provider.is_sandbox)
+        raise HTTPException(400,"Payfast server validation failed.")
+    logger.info("Payfast ITN check passed order=%s check=server_validation",order_ref)
+    try:order_id=uuid.UUID(order_ref)
+    except ValueError:
+        logger.warning("Payfast ITN rejected order=%s check=order_reference",order_ref)
+        raise HTTPException(400,"Invalid order reference.")
     order=db.scalar(select(PackageOrder).where(PackageOrder.id==order_id).with_for_update())
-    if order is None:raise HTTPException(404)
-    if order.provider != "payfast":raise HTTPException(400,"Payment provider mismatch.")
+    if order is None:
+        logger.warning("Payfast ITN rejected order=%s check=order_lookup",order_ref)
+        raise HTTPException(404)
+    if order.provider != "payfast":
+        logger.warning("Payfast ITN rejected order=%s check=provider expected=payfast actual=%s",order_ref,order.provider)
+        raise HTTPException(400,"Payment provider mismatch.")
     try:received_cents=round(float(data.get("amount_gross",""))*100)
-    except (TypeError,ValueError):raise HTTPException(400,"Invalid payment amount.")
-    if received_cents != order.amount_cents or order.currency != "ZAR":raise HTTPException(400,"Payment amount mismatch.")
+    except (TypeError,ValueError):
+        logger.warning("Payfast ITN rejected order=%s check=amount_parse",order_ref)
+        raise HTTPException(400,"Invalid payment amount.")
+    if received_cents != order.amount_cents or order.currency != "ZAR":
+        logger.warning("Payfast ITN rejected order=%s check=amount expected_cents=%s received_cents=%s currency=%s",order_ref,order.amount_cents,received_cents,order.currency)
+        raise HTTPException(400,"Payment amount mismatch.")
+    logger.info("Payfast ITN check passed order=%s check=amount",order_ref)
     if data.get("payment_status")=="COMPLETE":
         if order.status=="approved":
+            logger.info("Payfast ITN duplicate accepted order=%s status=approved",order_ref)
             db.commit();return Response(status_code=200)
-        if order.status!="awaiting_payment":raise HTTPException(409,"Order is not awaiting payment.")
+        if order.status!="awaiting_payment":
+            logger.warning("Payfast ITN rejected order=%s check=order_status actual=%s",order_ref,order.status)
+            raise HTTPException(409,"Order is not awaiting payment.")
         package=db.get(PackageConfig,order.package_code)
         event=db.get(Event,order.event_id)
-        if package is None or not package.is_active or event is None:raise HTTPException(409,"Package is no longer available.")
+        if package is None or not package.is_active or event is None:
+            logger.warning("Payfast ITN rejected order=%s check=package_event",order_ref)
+            raise HTTPException(409,"Package is no longer available.")
         mark_paid(order,data.get("pf_payment_id"));event.package_code=package.code;event.package_assigned_at=utcnow();order.status="approved";order.updated_at=utcnow();db.commit()
+        logger.info("Payfast ITN approved order=%s package=%s event=%s",order_ref,package.code,event.id)
     else:
+        logger.info("Payfast ITN acknowledged order=%s non_complete_status=%s",order_ref,data.get("payment_status","missing"))
         db.commit()
     return Response(status_code=200)
 
