@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.branding import DEFAULTS as BRAND_DEFAULTS, FONT_MAP, valid_hex
 from app.db import get_db
-from app.models import BrandingSettings, Event, Media, PackageConfig, PackageOrder, PaymentProviderConfig, User, utcnow
+from app.models import AdminActivity, BrandingSettings, Event, Media, PackageConfig, PackageOrder, PaymentProviderConfig, User, utcnow
 from app.security import user_from_session_token
 from app.services.credential_vault import encrypt_secret
 from app.services.storage import delete_objects, upload_fileobj
@@ -310,19 +310,58 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
     return RedirectResponse("/admin/packages", status_code=303)
 
 
-@router.get("/package-requests", response_class=HTMLResponse)
-def package_requests(request: Request, status: str = "", db: Session = Depends(get_db)):
+ORDER_STATUSES = {"pending", "awaiting_payment", "paid", "approved", "failed", "cancelled", "payment_review"}
+
+
+def record_order_activity(db: Session, admin: User | None, order: PackageOrder, action: str, previous_status: str, reason: str) -> None:
+    db.add(AdminActivity(
+        admin_user_id=admin.id if admin else None,
+        action=action,
+        target_type="package_order",
+        target_id=str(order.id),
+        target_label=f"{order.event.title} · {order.package_code}",
+        detail=f"Status {previous_status} → {order.status}. {reason}"[:1000],
+    ))
+
+
+def require_reconciliation_reason(reason: str) -> str:
+    cleaned = reason.strip()
+    if len(cleaned) < 5:
+        raise HTTPException(400, "A reconciliation reason of at least 5 characters is required.")
+    return cleaned[:800]
+
+
+@router.get("/package-requests", include_in_schema=False)
+def legacy_package_requests():
+    return RedirectResponse("/admin/orders", status_code=307)
+
+
+@router.get("/orders", response_class=HTMLResponse)
+def orders(request: Request, status: str = "", db: Session = Depends(get_db)):
     admin = require_admin(request, db)
     stmt = select(PackageOrder).order_by(PackageOrder.created_at.desc())
-    if status in {"pending", "awaiting_payment", "paid", "approved", "failed", "cancelled"}:
+    if status in ORDER_STATUSES:
         stmt = stmt.where(PackageOrder.status == status)
     orders = db.scalars(stmt.limit(250)).all()
-    return templates.TemplateResponse(request=request, name="admin/package_requests.html", context={"admin": admin, "section": "package_requests", "orders": orders, "status": status})
+    return templates.TemplateResponse(request=request, name="admin/orders.html", context={"admin": admin, "section": "orders", "orders": orders, "status": status})
 
 
-@router.post("/package-requests/{order_id}/approve")
-def approve_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
-    require_admin(request, db)
+@router.get("/orders/{order_id}", response_class=HTMLResponse)
+def order_detail(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    order = db.get(PackageOrder, order_id)
+    if order is None:
+        raise HTTPException(404)
+    history = db.scalars(select(AdminActivity).where(
+        AdminActivity.target_type == "package_order",
+        AdminActivity.target_id == str(order.id),
+    ).order_by(AdminActivity.created_at.desc())).all()
+    return templates.TemplateResponse(request=request, name="admin/order_detail.html", context={"admin": admin, "section": "orders", "order": order, "history": history})
+
+
+@router.post("/orders/{order_id}/approve")
+def approve_order(order_id: uuid.UUID, request: Request, reason: str = Form(...), db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
     require_same_origin(request)
     order = db.get(PackageOrder, order_id)
     if order is None:
@@ -332,6 +371,7 @@ def approve_package_request(order_id: uuid.UUID, request: Request, db: Session =
     require_resolved_payments(db, order.event_id)
     if order.status != "pending":
         raise HTTPException(409, "This package request is no longer pending.")
+    reason = require_reconciliation_reason(reason)
     package = db.get(PackageConfig, order.package_code)
     if package is None or not package.is_active:
         raise HTTPException(400, "The requested package is no longer available.")
@@ -340,27 +380,77 @@ def approve_package_request(order_id: uuid.UUID, request: Request, db: Session =
         raise HTTPException(404)
     event.package_code = package.code
     event.package_assigned_at = utcnow()
+    previous_status = order.status
     order.status = "approved"
     order.updated_at = utcnow()
+    record_order_activity(db, admin, order, "order_manually_approved", previous_status, reason)
     db.commit()
-    return RedirectResponse("/admin/package-requests?status=pending", status_code=303)
+    return RedirectResponse(f"/admin/orders/{order.id}", status_code=303)
 
 
-@router.post("/package-requests/{order_id}/cancel")
-def cancel_package_request(order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
-    require_admin(request, db)
+@router.post("/orders/{order_id}/cancel")
+def cancel_order(order_id: uuid.UUID, request: Request, reason: str = Form(...), db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
     require_same_origin(request)
     order = db.get(PackageOrder, order_id)
     if order is None:
         raise HTTPException(404)
     lock_commercial_event(db, order.event_id)
     db.refresh(order)
-    if order.status != "pending":
-        raise HTTPException(409, "This package request is no longer pending.")
+    if order.status not in {"pending", "awaiting_payment"}:
+        raise HTTPException(409, "Only pending or awaiting-payment orders can be cancelled.")
+    reason = require_reconciliation_reason(reason)
+    previous_status = order.status
     order.status = "cancelled"
     order.updated_at = utcnow()
+    record_order_activity(db, admin, order, "order_cancelled", previous_status, reason)
     db.commit()
-    return RedirectResponse("/admin/package-requests?status=pending", status_code=303)
+    return RedirectResponse(f"/admin/orders/{order.id}", status_code=303)
+
+
+@router.post("/orders/{order_id}/fail")
+def fail_order(order_id: uuid.UUID, request: Request, reason: str = Form(...), db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    require_same_origin(request)
+    order = db.get(PackageOrder, order_id)
+    if order is None:
+        raise HTTPException(404)
+    lock_commercial_event(db, order.event_id)
+    db.refresh(order)
+    if order.status != "awaiting_payment":
+        raise HTTPException(409, "Only an awaiting-payment order can be marked failed.")
+    reason = require_reconciliation_reason(reason)
+    previous_status = order.status
+    order.status = "failed"
+    order.updated_at = utcnow()
+    record_order_activity(db, admin, order, "order_marked_failed", previous_status, reason)
+    db.commit()
+    return RedirectResponse(f"/admin/orders/{order.id}", status_code=303)
+
+
+@router.post("/orders/{order_id}/activate-reviewed-payment")
+def activate_reviewed_payment(order_id: uuid.UUID, request: Request, reason: str = Form(...), db: Session = Depends(get_db)):
+    admin = require_admin(request, db)
+    require_same_origin(request)
+    order = db.get(PackageOrder, order_id)
+    if order is None:
+        raise HTTPException(404)
+    event = lock_commercial_event(db, order.event_id)
+    db.refresh(order)
+    if order.status not in {"paid", "payment_review"}:
+        raise HTTPException(409, "This order is not ready for reviewed activation.")
+    package = db.get(PackageConfig, order.package_code)
+    if package is None or not package.is_active:
+        raise HTTPException(409, "The ordered package is no longer available.")
+    reason = require_reconciliation_reason(reason)
+    previous_status = order.status
+    event.package_code = package.code
+    event.package_assigned_at = utcnow()
+    order.status = "approved"
+    order.updated_at = utcnow()
+    record_order_activity(db, admin, order, "reviewed_payment_activated", previous_status, reason)
+    db.commit()
+    return RedirectResponse(f"/admin/orders/{order.id}", status_code=303)
 
 
 @router.get("/settings/payments", response_class=HTMLResponse)

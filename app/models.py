@@ -149,6 +149,10 @@ class PackageOrder(Base):
     event: Mapped[Event] = relationship(back_populates="package_orders")
     user: Mapped[User] = relationship()
 
+    @property
+    def requires_review(self) -> bool:
+        return self.status == "payment_review"
+
 
 class PaymentProviderConfig(Base):
     __tablename__ = "payment_provider_configs"

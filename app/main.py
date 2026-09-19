@@ -21,14 +21,14 @@ from sqlalchemy.orm import Session
 
 from app import __version__
 from app.db import engine, get_db
-from app.models import ArchiveJob, Event, Media, PackageConfig, PackageOrder, User, UserSession, utcnow
+from app.models import AdminActivity, ArchiveJob, Event, Media, PackageConfig, PackageOrder, User, UserSession, utcnow
 from app.security import hash_password, new_session, user_from_session_token, verify_password
 from app.services.archive import archive_expires_at, archive_is_expired
 from app.services.credential_vault import decrypt_secret
 from app.services.package_enforcement import event_package_usage, enforce_upload_entitlement, require_feature
 from app.services.payments import begin_checkout, mark_paid, payfast_checkout_fields, payfast_checkout_fields_for_config, payfast_process_url, payfast_runtime_config, valid_payfast_itn_signature, valid_payfast_server_confirmation
 from app.services.packages import get_package
-from app.services.package_orders import lock_commercial_event, require_resolved_payments
+from app.services.package_orders import flag_late_completed_payment, lock_commercial_event, require_resolved_payments
 from app.services.storage import bucket_is_ready, create_presigned_download, create_presigned_upload, delete_objects, ensure_bucket, head_object
 from app.settings import settings
 
@@ -182,7 +182,7 @@ def package_selection(event_id:str,request:Request,requested:str="",db:Session=D
     user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
     event=event_for_owner(db,user,event_id)
-    outstanding=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status.in_(("awaiting_payment","paid"))).order_by(PackageOrder.created_at.desc()))
+    outstanding=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status.in_(("awaiting_payment","paid","payment_review"))).order_by(PackageOrder.created_at.desc()))
     if outstanding:
         return templates.TemplateResponse(request=request,name="payment_pending.html",context={"event":event,"order":outstanding})
     event=event_for_owner(db,user,event_id);packages=db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.code)).all();current=get_package(event.package_code,db=db);requested_package=next((p for p in packages if p.code==requested),None)
@@ -303,6 +303,13 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
         if order.status=="approved":
             logger.info("Payfast ITN duplicate accepted order=%s status=approved",order_ref)
             db.commit();return Response(status_code=200)
+        if order.status=="payment_review":
+            logger.info("Payfast ITN duplicate accepted order=%s status=payment_review",order_ref)
+            db.commit();return Response(status_code=200)
+        if order.status in {"cancelled","failed"}:
+            previous_status=order.status
+            flag_late_completed_payment(db,order,data.get("pf_payment_id"))
+            db.commit();logger.warning("Payfast ITN requires review order=%s previous_status=%s",order_ref,previous_status);return Response(status_code=200)
         if order.status!="awaiting_payment":
             logger.warning("Payfast ITN rejected order=%s check=order_status actual=%s",order_ref,order.status)
             raise HTTPException(409,"Order is not awaiting payment.")
@@ -314,7 +321,11 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
         mark_paid(order,data.get("pf_payment_id"));event.package_code=package.code;event.package_assigned_at=utcnow();order.status="approved";order.updated_at=utcnow();db.commit()
         logger.info("Payfast ITN approved order=%s package=%s event=%s",order_ref,package.code,event.id)
     else:
-        logger.info("Payfast ITN acknowledged order=%s non_complete_status=%s",order_ref,data.get("payment_status","missing"))
+        provider_status=data.get("payment_status","").upper()
+        if order.status=="awaiting_payment" and provider_status in {"FAILED","CANCELLED"}:
+            previous_status=order.status;order.status="failed" if provider_status=="FAILED" else "cancelled";order.updated_at=utcnow()
+            db.add(AdminActivity(action="provider_payment_closed",target_type="package_order",target_id=str(order.id),target_label=f"{order.event.title} · {order.package_code}",detail=f"Status {previous_status} → {order.status}. Verified Payfast status: {provider_status}."))
+        logger.info("Payfast ITN acknowledged order=%s non_complete_status=%s",order_ref,provider_status or "missing")
         db.commit()
     return Response(status_code=200)
 
