@@ -1,5 +1,9 @@
 from dataclasses import dataclass
 from typing import Protocol
+from hashlib import md5
+from urllib.parse import quote_plus
+
+from app.settings import settings
 
 from app.models import Event, PackageOrder, utcnow
 
@@ -26,7 +30,40 @@ class ManualPaymentProvider:
     def create_checkout(self, order: PackageOrder, event: Event) -> CheckoutSession:
         return CheckoutSession(provider=self.code, reference=str(order.id))
 
-PROVIDERS: dict[str, PaymentProvider] = {"manual": ManualPaymentProvider()}
+class PayfastPaymentProvider:
+    code = "payfast"
+    def create_checkout(self, order: PackageOrder, event: Event) -> CheckoutSession:
+        if not settings.payfast_merchant_id or not settings.payfast_merchant_key:
+            raise ValueError("Payfast merchant credentials are not configured.")
+        return CheckoutSession(provider=self.code, reference=str(order.id), redirect_url=payfast_process_url())
+
+PROVIDERS: dict[str, PaymentProvider] = {"manual": ManualPaymentProvider(), "payfast": PayfastPaymentProvider()}
+
+def payfast_process_url() -> str:
+    return "https://sandbox.payfast.co.za/eng/process" if settings.payfast_sandbox else "https://www.payfast.co.za/eng/process"
+
+def _encoded(value: object) -> str:
+    return quote_plus(str(value).strip(), safe="")
+
+def payfast_signature(data: dict[str, str], passphrase: str | None = None) -> str:
+    parts = [f"{key}={_encoded(value)}" for key, value in data.items() if value != "" and key != "signature"]
+    if passphrase:
+        parts.append(f"passphrase={_encoded(passphrase)}")
+    return md5("&".join(parts).encode("utf-8")).hexdigest()
+
+def payfast_checkout_fields(order: PackageOrder, event: Event, email: str, app_url: str) -> dict[str, str]:
+    if not settings.payfast_merchant_id or not settings.payfast_merchant_key:
+        raise ValueError("Payfast merchant credentials are not configured.")
+    base = app_url.rstrip("/")
+    data = {"merchant_id": settings.payfast_merchant_id, "merchant_key": settings.payfast_merchant_key, "return_url": f"{base}/payments/payfast/return?order_id={order.id}", "cancel_url": f"{base}/payments/payfast/cancel?order_id={order.id}", "notify_url": f"{base}/payments/payfast/notify", "email_address": email, "m_payment_id": str(order.id), "amount": f"{order.amount_cents / 100:.2f}", "item_name": f"Memories Events - {order.package_code.title()} package"}
+    data["signature"] = payfast_signature(data, settings.payfast_passphrase)
+    return data
+
+def valid_payfast_itn_signature(form_items: list[tuple[str, str]]) -> bool:
+    supplied = next((value for key, value in form_items if key == "signature"), "")
+    data = {key: value for key, value in form_items if key != "signature"}
+    return bool(supplied) and supplied == payfast_signature(data, settings.payfast_passphrase)
+
 
 def provider_for(code: str) -> PaymentProvider:
     provider = PROVIDERS.get(code)
