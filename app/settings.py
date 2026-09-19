@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     payfast_merchant_id: str | None = None
     payfast_merchant_key: str | None = None
     payfast_passphrase: str | None = None
+    payment_credentials_encryption_key: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
