@@ -148,3 +148,15 @@ class PackageOrder(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
     event: Mapped[Event] = relationship(back_populates="package_orders")
     user: Mapped[User] = relationship()
+
+
+class PaymentProviderConfig(Base):
+    __tablename__ = "payment_provider_configs"
+    code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_sandbox: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    merchant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    merchant_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    passphrase: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
