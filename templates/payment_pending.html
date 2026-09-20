@@ -8,8 +8,9 @@
 <p>Your payment for <strong>{{ event.title }}</strong> has not yet been resolved.
 Package changes are paused until confirmation. Your current package stays unchanged.</p>
 <p>Leaving or cancelling the payment page does not confirm that no payment was made.
-If you abandoned checkout or this status does not update, contact support with this order reference:</p>
+If you abandoned checkout, you can cancel this order below. A payment confirmed after cancellation will be held for administrator review.</p>
 <p><code>{{ order.id }}</code></p>
 <a class="button-link" href="/events/{{ event.id }}/packages">Check payment status</a>
+<form method="post" action="/events/{{ event.id }}/orders/{{ order.id }}/cancel" style="display:inline;margin:0"><button class="secondary" type="submit">Cancel this order</button></form>
 <a class="button-link secondary-link" href="/events/{{ event.id }}">Manage event</a>
 </section></main></body></html>
