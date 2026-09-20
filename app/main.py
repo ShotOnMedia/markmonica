@@ -252,6 +252,19 @@ def payfast_cancel(order_id: uuid.UUID, request: Request, db: Session = Depends(
     # Browser navigation is advisory; a delayed verified ITN remains authoritative.
     return RedirectResponse(f"/events/{order.event_id}/packages?payment=cancelled",303)
 
+@app.post("/events/{event_id}/orders/{order_id}/cancel")
+def cancel_host_order(event_id: str, order_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+    require_same_origin(request);user=current_user(request,db)
+    if user is None:return RedirectResponse("/login",303)
+    event=event_for_owner(db,user,event_id)
+    event=lock_commercial_event(db,event.id)
+    order=db.scalar(select(PackageOrder).where(PackageOrder.id==order_id).with_for_update().execution_options(populate_existing=True))
+    if order is None or order.event_id != event.id or order.user_id != user.id:raise HTTPException(404)
+    if order.status != "awaiting_payment":raise HTTPException(409,"Only an awaiting-payment order can be cancelled.")
+    previous_status=order.status;order.status="cancelled";order.updated_at=utcnow()
+    db.add(AdminActivity(admin_user_id=None,action="order_cancelled_by_host",target_type="package_order",target_id=str(order.id),target_label=f"{event.title} · {order.package_code}",detail=f"Status {previous_status} → cancelled. Host explicitly cancelled the outstanding order."))
+    db.commit();return RedirectResponse(f"/events/{event.id}/packages?payment=cancelled",303)
+
 @app.post("/payments/payfast/notify")
 async def payfast_notify(request: Request, db: Session = Depends(get_db)):
     form=await request.form();items=[(str(k),str(v)) for k,v in form.multi_items()]
