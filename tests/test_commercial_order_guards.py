@@ -8,7 +8,7 @@ from starlette.requests import Request
 
 from app import main
 from app.db import Base
-from app.models import Event, PackageConfig, PackageOrder, User
+from app.models import AdminActivity, Event, PackageConfig, PackageOrder, User
 
 
 @pytest.fixture
@@ -75,6 +75,40 @@ def test_cancel_return_keeps_payment_outstanding(context):
     response = main.payfast_cancel(order.id, request, db)
     assert response.status_code == 303
     db.refresh(order)
+    assert order.status == "awaiting_payment"
+
+
+def test_host_can_explicitly_cancel_awaiting_payment(context):
+    db, user, event, request = context
+    order = add_order(db, user, event, "awaiting_payment")
+    response = main.cancel_host_order(str(event.id), order.id, request, db)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/events/{event.id}/packages?payment=cancelled"
+    assert order.status == "cancelled"
+    activity = db.scalar(select(AdminActivity).where(AdminActivity.target_id == str(order.id)))
+    assert activity.action == "order_cancelled_by_host"
+    assert activity.admin_user_id is None
+
+
+@pytest.mark.parametrize("status", ["pending", "paid", "approved", "failed", "cancelled", "payment_review"])
+def test_host_cannot_cancel_non_awaiting_order(context, status):
+    db, user, event, request = context
+    order = add_order(db, user, event, status)
+    with pytest.raises(HTTPException) as error:
+        main.cancel_host_order(str(event.id), order.id, request, db)
+    assert error.value.status_code == 409
+    assert order.status == status
+
+
+def test_host_cannot_cancel_another_users_order(context):
+    db, user, event, request = context
+    other = User(email="other@example.com", display_name="Other", password_hash="x")
+    other_event = Event(owner=other, slug="other-event", title="Other Event", package_code="starter")
+    db.add_all([other, other_event]);db.commit()
+    order = add_order(db, other, other_event, "awaiting_payment")
+    with pytest.raises(HTTPException) as error:
+        main.cancel_host_order(str(event.id), order.id, request, db)
+    assert error.value.status_code == 404
     assert order.status == "awaiting_payment"
 
 
