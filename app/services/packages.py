@@ -20,12 +20,15 @@ class PackageDefinition:
     guest_gallery: bool
     archive_downloads: bool
     custom_event_design: bool
+    tier_rank: int
+    payment_required: bool
 
 
 PACKAGES: dict[str, PackageDefinition] = {
-    "starter": PackageDefinition("starter", "Starter", None, 100, 1 * GIB, 500 * MIB, False, True, True),
-    "celebration": PackageDefinition("celebration", "Celebration", None, 500, 5 * GIB, 500 * MIB, True, True, True),
-    "premium": PackageDefinition("premium", "Premium", None, None, None, 500 * MIB, True, True, True),
+    "demo": PackageDefinition("demo", "Demo", None, 20, 250 * MIB, 50 * MIB, False, False, False, 0, False),
+    "starter": PackageDefinition("starter", "Starter", None, 100, 1 * GIB, 500 * MIB, False, True, True, 10, True),
+    "celebration": PackageDefinition("celebration", "Celebration", None, 500, 5 * GIB, 500 * MIB, True, True, True, 20, True),
+    "premium": PackageDefinition("premium", "Premium", None, None, None, 500 * MIB, True, True, True, 30, True),
 }
 
 DEFAULT_PACKAGE_CODE = "starter"
@@ -56,6 +59,8 @@ def get_package(code: str | None, db: "Session | None" = None) -> PackageDefinit
                 guest_gallery=config.guest_gallery,
                 archive_downloads=config.archive_downloads,
                 custom_event_design=config.custom_event_design,
+                tier_rank=config.tier_rank,
+                payment_required=config.payment_required,
             )
     return PACKAGES[resolved]
 
@@ -84,4 +89,6 @@ def package_metadata(code: str | None, db: "Session | None" = None) -> dict[str,
             "archive_downloads": package.archive_downloads,
             "custom_event_design": package.custom_event_design,
         },
+        "tier_rank": package.tier_rank,
+        "payment_required": package.payment_required,
     }

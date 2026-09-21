@@ -18,8 +18,11 @@ def context(monkeypatch):
     with Session(engine) as db:
         user = User(email="host@example.com", display_name="Host", password_hash="x")
         event = Event(owner=user, slug="test-event", title="Event", package_code="starter")
-        db.add_all([user, event, PackageConfig(code="celebration", name="Celebration", price_cents=50000),
-                    PackageConfig(code="premium", name="Premium", price_cents=90000)])
+        db.add_all([user, event,
+                    PackageConfig(code="demo", name="Demo", price_cents=0, tier_rank=0, payment_required=False),
+                    PackageConfig(code="starter", name="Starter", price_cents=29500, tier_rank=10),
+                    PackageConfig(code="celebration", name="Celebration", price_cents=50000, tier_rank=20),
+                    PackageConfig(code="premium", name="Premium", price_cents=90000, tier_rank=30)])
         db.commit()
         monkeypatch.setattr(main, "current_user", lambda request, session: user)
         monkeypatch.setattr(main, "require_same_origin", lambda request: None)
@@ -57,6 +60,15 @@ def test_pending_selection_reuses_order_without_granting_entitlements(context):
     assert order.amount_cents == 90000
     assert event.package_code == "starter"
     assert len(db.scalars(select(PackageOrder)).all()) == 1
+
+
+def test_host_cannot_downgrade_package(context):
+    db, user, event, request = context
+    event.package_code = "premium";db.commit()
+    with pytest.raises(HTTPException) as error:
+        main.package_request(str(event.id), request, "celebration", db)
+    assert error.value.status_code == 409
+    assert event.package_code == "premium"
 
 
 @pytest.mark.parametrize("status", ["approved", "paid", "cancelled", "failed", "awaiting_payment"])
