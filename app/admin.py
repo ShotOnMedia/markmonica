@@ -207,7 +207,7 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
         "videos": sum(1 for item in media if item.content_type.startswith("video/")),
         "processing": sum(1 for item in media if item.processing_status not in READY_PROCESSING_STATES),
     }
-    packages = db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.code)).all()
+    packages = db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.tier_rank, PackageConfig.code)).all()
     return templates.TemplateResponse(request=request, name="admin/event_detail.html", context={
         "admin": admin, "section": "events", "event": event, "media": media,
         "counts": counts, "storage_label": fmt_bytes(storage), "fmt_bytes": fmt_bytes,
@@ -265,7 +265,7 @@ def media_overview(request: Request, q: str = "", processing: str = "", db: Sess
 @router.get("/packages", response_class=HTMLResponse)
 def packages(request: Request, db: Session = Depends(get_db)):
     admin = require_admin(request, db)
-    rows = db.scalars(select(PackageConfig).order_by(PackageConfig.code)).all()
+    rows = db.scalars(select(PackageConfig).order_by(PackageConfig.tier_rank, PackageConfig.code)).all()
     usage_rows = db.execute(
         select(Event.package_code, func.count(func.distinct(Event.id)), func.count(Media.id), func.coalesce(func.sum(Media.size_bytes), 0))
         .outerjoin(Media, Media.event_id == Event.id).group_by(Event.package_code)
@@ -278,7 +278,7 @@ def packages(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/packages/{code}")
-def update_package(code: str, request: Request, name: str = Form(...), max_media_per_event: str = Form(""), max_storage_gb: str = Form(""), max_video_mb: str = Form(""), price_zar: str = Form("0"), guest_gallery: str | None = Form(None), archive_downloads: str | None = Form(None), custom_event_design: str | None = Form(None), is_active: str | None = Form(None), db: Session = Depends(get_db)):
+def update_package(code: str, request: Request, name: str = Form(...), tier_rank: int = Form(...), max_media_per_event: str = Form(""), max_storage_gb: str = Form(""), max_video_mb: str = Form(""), price_zar: str = Form("0"), payment_required: str | None = Form(None), guest_gallery: str | None = Form(None), archive_downloads: str | None = Form(None), custom_event_design: str | None = Form(None), is_active: str | None = Form(None), db: Session = Depends(get_db)):
     require_admin(request, db)
     package = db.get(PackageConfig, code)
     if package is None:
@@ -286,7 +286,13 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
     clean_name = name.strip()
     if not clean_name:
         raise HTTPException(400, "Package name is required.")
+    if tier_rank < 0:
+        raise HTTPException(400, "Package rank must be zero or higher.")
+    duplicate_rank = db.scalar(select(PackageConfig.code).where(PackageConfig.tier_rank == tier_rank, PackageConfig.code != code).limit(1))
+    if duplicate_rank is not None:
+        raise HTTPException(400, "Package ranks must be unique.")
     package.name = clean_name
+    package.tier_rank = tier_rank
     package.max_media_per_event = parse_optional_limit(max_media_per_event)
     package.max_storage_bytes_per_event = parse_optional_limit(max_storage_gb, GIB)
     package.max_video_bytes = parse_optional_limit(max_video_mb, MIB)
@@ -298,6 +304,9 @@ def update_package(code: str, request: Request, name: str = Form(...), max_media
     except (InvalidOperation, ValueError):
         raise HTTPException(400, "Package price must be a valid non-negative amount.")
     package.currency = "ZAR"
+    package.payment_required = payment_required == "on"
+    if not package.payment_required:
+        package.price_cents = 0
     package.guest_gallery = guest_gallery == "on"
     package.archive_downloads = archive_downloads == "on"
     package.custom_event_design = custom_event_design == "on"
