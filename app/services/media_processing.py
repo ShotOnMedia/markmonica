@@ -52,6 +52,24 @@ def requeue_legacy_derivatives() -> int:
         return len(affected)
 
 
+def requeue_interrupted_processing() -> int:
+    """Recover jobs left in ``processing`` when a worker was restarted."""
+    with SessionLocal() as db:
+        interrupted = db.scalars(
+            select(Media).where(
+                Media.status == "uploaded",
+                Media.processing_status == "processing",
+            )
+        ).all()
+        for media in interrupted:
+            media.processing_status = "pending"
+            media.processing_error = None
+        if interrupted:
+            db.commit()
+            logger.warning("Requeued %s interrupted media processing job(s)", len(interrupted))
+        return len(interrupted)
+
+
 def _run(command: list[str]) -> None:
     subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=1800)
 

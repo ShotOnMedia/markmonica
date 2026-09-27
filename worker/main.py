@@ -7,7 +7,12 @@ from redis import Redis
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from app.services.archive import build_archive, cleanup_expired_archives, process_next_archive
-from app.services.media_processing import process_media, process_next_pending, requeue_legacy_derivatives
+from app.services.media_processing import (
+    process_media,
+    process_next_pending,
+    requeue_interrupted_processing,
+    requeue_legacy_derivatives,
+)
 from app.services.upload_cleanup import cleanup_stale_uploads
 from app.settings import settings
 
@@ -81,6 +86,7 @@ def main() -> None:
     logger.info("Memories' Events worker started; queue=%s", settings.worker_queue)
     run_cleanup()
     run_archive_cleanup()
+    requeue_interrupted_processing()
     requeue_legacy_derivatives()
     run_pending_media()
     run_pending_archives()

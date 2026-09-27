@@ -72,3 +72,29 @@ def test_legacy_derivatives_are_requeued_for_automatic_repair(monkeypatch):
     with Session(engine) as db:
         assert db.get(Media, legacy_id).processing_status == "pending"
         assert db.get(Media, current_id).processing_status == "ready"
+
+
+def test_interrupted_processing_is_requeued_after_worker_restart(monkeypatch):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    test_session = sessionmaker(bind=engine, expire_on_commit=False)
+    monkeypatch.setattr(media_processing, "SessionLocal", test_session)
+
+    with Session(engine) as db:
+        user = User(email="restart@example.com", display_name="Host", password_hash="x")
+        event = Event(owner=user, slug="worker-restart", title="Worker restart")
+        interrupted = make_media()
+        interrupted.event = event
+        interrupted.processing_status = "processing"
+        ready = make_media()
+        ready.event = event
+        db.add_all([user, event, interrupted, ready])
+        db.commit()
+        interrupted_id = interrupted.id
+        ready_id = ready.id
+
+    assert media_processing.requeue_interrupted_processing() == 1
+
+    with Session(engine) as db:
+        assert db.get(Media, interrupted_id).processing_status == "pending"
+        assert db.get(Media, ready_id).processing_status == "ready"
