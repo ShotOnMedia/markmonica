@@ -99,7 +99,9 @@ def clean_accent_color(value):
 def event_for_owner(db,user,event_id):
     try:event_id=uuid.UUID(str(event_id))
     except (ValueError,TypeError,AttributeError):raise HTTPException(404)
-    event=db.scalar(select(Event).where(Event.id==event_id,Event.owner_id==user.id))
+    stmt=select(Event).where(Event.id==event_id)
+    if not user.is_admin:stmt=stmt.where(Event.owner_id==user.id)
+    event=db.scalar(stmt)
     if event is None:raise HTTPException(404)
     return event
 def live_event_by_slug(db,slug):
@@ -358,7 +360,7 @@ async def payfast_notify(request: Request, db: Session = Depends(get_db)):
 def manage_event(event_id:str,request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
-    event=event_for_owner(db,user,event_id);media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded").order_by(Media.created_at.desc())).all();package=get_package(event.package_code,db=db);usage=event_package_usage(db,event);return templates.TemplateResponse(request=request,name="event_manage.html",context={"user":user,"event":event,"guest_url":guest_url(event),"media":media,"package":package,"package_usage":usage})
+    event=event_for_owner(db,user,event_id);media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded").order_by(Media.created_at.desc())).all();package=get_package(event.package_code,db=db);usage=event_package_usage(db,event);return templates.TemplateResponse(request=request,name="event_manage.html",context={"user":user,"event":event,"guest_url":guest_url(event),"media":media,"package":package,"package_usage":usage,"admin_mode":bool(user.is_admin and event.owner_id!=user.id)})
 @app.post("/events/{event_id}")
 def update_event(event_id:str,request:Request,title:str=Form(...),event_date:str=Form(""),status:str=Form("draft"),welcome_message:str=Form(""),thank_you_message:str=Form(""),theme:str=Form("classic"),accent_color:str=Form(DEFAULT_ACCENT_COLOR),guest_font:str=Form("default"),guest_gallery_enabled:str|None=Form(None),db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
