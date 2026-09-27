@@ -35,7 +35,7 @@ def cleanup_stale_uploads(now: datetime | None = None) -> dict[str, int]:
         stale = list(
             db.scalars(
                 select(Media)
-                .where(Media.status == "uploading", Media.created_at < cutoff)
+                .where(Media.status.in_(("pending", "uploading")), Media.created_at < cutoff)
                 .order_by(Media.created_at.asc())
             )
         )
