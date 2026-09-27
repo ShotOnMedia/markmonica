@@ -1,10 +1,17 @@
 from pathlib import Path
+import uuid
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from app.admin import READY_PROCESSING_STATES, router as admin_router
 from app.asgi import app
-from app.models import BrandingSettings, PackageConfig, User
+from app.db import Base
+from app.main import event_for_owner
+from app.models import BrandingSettings, Event, PackageConfig, User
 
 
 def test_admin_routes_are_registered():
@@ -77,3 +84,27 @@ def test_admin_mutation_routes_are_post_only():
     assert route_methods["/admin/events/{event_id}/package"] == {"POST"}
     assert route_methods["/admin/packages/{code}"] == {"POST"}
     assert route_methods["/admin/branding"] == {"GET", "POST"}
+
+
+def test_admin_can_open_another_hosts_event_manager_but_hosts_remain_isolated():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        owner = User(email="owner@example.com", display_name="Owner", password_hash="x")
+        other_host = User(email="other@example.com", display_name="Other", password_hash="x")
+        admin = User(email="admin@example.com", display_name="Admin", password_hash="x", is_admin=True)
+        event = Event(owner=owner, slug=f"admin-open-{uuid.uuid4().hex[:8]}", title="Client event")
+        db.add_all([owner, other_host, admin, event])
+        db.commit()
+        db.refresh(event)
+
+        assert event_for_owner(db, admin, event.id).id == event.id
+        with pytest.raises(HTTPException) as exc:
+            event_for_owner(db, other_host, event.id)
+        assert exc.value.status_code == 404
+
+
+def test_host_manager_has_an_explicit_admin_return_path():
+    template = Path("templates/event_manage.html").read_text()
+    assert "Administrator view · Managing for" in template
+    assert "'/admin/events/' ~ event.id if admin_mode else '/dashboard'" in template
