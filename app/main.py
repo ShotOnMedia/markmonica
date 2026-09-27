@@ -167,16 +167,23 @@ def logout(request:Request,db:Session=Depends(get_db)):
 def dashboard(request:Request,db:Session=Depends(get_db)):
     user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
-    events=db.scalars(select(Event).where(Event.owner_id==user.id).order_by(Event.created_at.desc())).all();return templates.TemplateResponse(request=request,name="dashboard.html",context={"user":user,"events":events,"today":date.today(),"error":None})
+    events=db.scalars(select(Event).where(Event.owner_id==user.id).order_by(Event.created_at.desc())).all();packages=db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.tier_rank,PackageConfig.code)).all();return templates.TemplateResponse(request=request,name="dashboard.html",context={"user":user,"events":events,"packages":packages,"today":date.today(),"error":None})
 @app.post("/events")
-def create_event(request:Request,title:str=Form(...),event_date:str=Form(""),db:Session=Depends(get_db)):
+def create_event(request:Request,title:str=Form(...),package_code:str=Form(...),event_date:str=Form(""),db:Session=Depends(get_db)):
     require_same_origin(request);user=current_user(request,db)
     if user is None:return RedirectResponse("/login",303)
     title=title.strip()
     if not title:return RedirectResponse("/dashboard",303)
+    package=db.get(PackageConfig,package_code)
+    if package is None or not package.is_active:raise HTTPException(400,"Please select an available package.")
     try:parsed_date=date.fromisoformat(event_date) if event_date else None
     except ValueError:parsed_date=None
-    event=Event(owner_id=user.id,title=title,event_date=parsed_date,slug=f"{slugify(title)}-{secrets.token_hex(3)}");db.add(event);db.commit();db.refresh(event);return RedirectResponse(f"/events/{event.id}",303)
+    assigned_code=package.code if not package.payment_required else "demo"
+    if db.get(PackageConfig,assigned_code) is None:raise HTTPException(503,"The Demo package is not configured.")
+    event=Event(owner_id=user.id,title=title,event_date=parsed_date,slug=f"{slugify(title)}-{secrets.token_hex(3)}",package_code=assigned_code,status="draft");db.add(event);db.flush()
+    if not package.payment_required:
+        db.commit();return RedirectResponse(f"/events/{event.id}",303)
+    order=PackageOrder(event_id=event.id,user_id=user.id,package_code=package.code,status="pending",source="event_creation",amount_cents=package.price_cents,currency=package.currency);db.add(order);db.commit();return RedirectResponse(f"/events/{event.id}/orders/{order.id}/checkout",303)
 @app.get("/events/{event_id}/packages",response_class=HTMLResponse)
 def package_selection(event_id:str,request:Request,requested:str="",db:Session=Depends(get_db)):
     user=current_user(request,db)
@@ -185,8 +192,8 @@ def package_selection(event_id:str,request:Request,requested:str="",db:Session=D
     outstanding=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status.in_(("awaiting_payment","paid","payment_review"))).order_by(PackageOrder.created_at.desc()))
     if outstanding:
         return templates.TemplateResponse(request=request,name="payment_pending.html",context={"event":event,"order":outstanding})
-    event=event_for_owner(db,user,event_id);packages=db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.code)).all();current=get_package(event.package_code,db=db);requested_package=next((p for p in packages if p.code==requested),None)
-    return templates.TemplateResponse(request=request,name="package_select.html",context={"user":user,"event":event,"packages":packages,"current":current,"requested":requested_package})
+    event=event_for_owner(db,user,event_id);packages=db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.tier_rank,PackageConfig.code)).all();current=get_package(event.package_code,db=db);current_config=db.get(PackageConfig,event.package_code);requested_package=next((p for p in packages if p.code==requested),None)
+    return templates.TemplateResponse(request=request,name="package_select.html",context={"user":user,"event":event,"packages":packages,"current":current,"current_config":current_config,"requested":requested_package})
 
 @app.post("/events/{event_id}/package-request")
 def package_request(event_id:str,request:Request,package_code:str=Form(...),db:Session=Depends(get_db)):
@@ -198,6 +205,11 @@ def package_request(event_id:str,request:Request,package_code:str=Form(...),db:S
     package=db.get(PackageConfig,package_code)
     if package is None or not package.is_active:raise HTTPException(400,"This package is not available.")
     if package.code==event.package_code:return RedirectResponse(f"/events/{event.id}/packages",303)
+    current_package=db.get(PackageConfig,event.package_code)
+    if current_package is None:raise HTTPException(409,"The current package configuration is unavailable.")
+    if package.tier_rank <= current_package.tier_rank:raise HTTPException(409,"Hosts can only upgrade to a higher package. Contact support to discuss a downgrade.")
+    if not package.payment_required:
+        event.package_code=package.code;event.package_assigned_at=utcnow();db.commit();return RedirectResponse(f"/events/{event.id}",303)
     existing=db.scalar(select(PackageOrder).where(PackageOrder.event_id==event.id,PackageOrder.status=="pending").order_by(PackageOrder.created_at.desc()))
     if existing:existing.package_code=package.code;existing.amount_cents=package.price_cents;existing.currency=package.currency;existing.updated_at=utcnow()
     else:
@@ -354,6 +366,9 @@ def update_event(event_id:str,request:Request,title:str=Form(...),event_date:str
     event=event_for_owner(db,user,event_id);package=get_package(event.package_code,db=db);event.title=title.strip() or event.title
     try:event.event_date=date.fromisoformat(event_date) if event_date else None
     except ValueError:pass
+    if status=="live":
+        unresolved=db.scalar(select(PackageOrder.id).where(PackageOrder.event_id==event.id,PackageOrder.status.in_(("pending","awaiting_payment","paid","payment_review"))).limit(1))
+        if unresolved is not None:raise HTTPException(409,"This event cannot go live until its package payment is resolved.")
     event.status="live" if status=="live" else "draft";event.welcome_message=clean_message(welcome_message);event.thank_you_message=clean_message(thank_you_message)
     if package.custom_event_design:
         event.theme=theme if theme in ALLOWED_EVENT_THEMES else "classic";event.accent_color=clean_accent_color(accent_color);event.guest_font=guest_font if guest_font in ALLOWED_GUEST_FONTS else "default"

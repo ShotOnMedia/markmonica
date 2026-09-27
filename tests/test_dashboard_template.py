@@ -8,6 +8,8 @@ def test_dashboard_template_has_v05_host_sections():
     assert "host-event-grid" in template
     assert "Manage event" in template
     assert "Guest page" in template
+    assert 'name="package_code"' in template
+    assert "Select a package" in template
 
 
 def test_dashboard_stylesheet_is_loaded():

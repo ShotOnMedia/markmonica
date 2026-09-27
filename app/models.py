@@ -103,6 +103,8 @@ class PackageConfig(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     price_cents: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="ZAR", nullable=False)
+    tier_rank: Mapped[int] = mapped_column(Integer, default=0, index=True, nullable=False)
+    payment_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 class BrandingSettings(Base):

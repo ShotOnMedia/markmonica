@@ -33,7 +33,7 @@ def test_user_model_has_explicit_admin_flag():
 def test_package_config_model_has_managed_limits():
     for column in (
         "code", "name", "max_media_per_event", "max_storage_bytes_per_event", "max_video_bytes",
-        "guest_gallery", "archive_downloads", "custom_event_design", "is_active",
+        "guest_gallery", "archive_downloads", "custom_event_design", "is_active", "tier_rank", "payment_required",
     ):
         assert column in PackageConfig.__table__.columns
 
