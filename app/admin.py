@@ -205,7 +205,7 @@ def event_detail(event_id: uuid.UUID, request: Request, db: Session = Depends(ge
         "all": len(media),
         "photos": sum(1 for item in media if item.content_type.startswith("image/")),
         "videos": sum(1 for item in media if item.content_type.startswith("video/")),
-        "processing": sum(1 for item in media if item.processing_status not in READY_PROCESSING_STATES),
+        "processing": sum(1 for item in media if item.status == "uploaded" and item.processing_status not in READY_PROCESSING_STATES),
     }
     packages = db.scalars(select(PackageConfig).where(PackageConfig.is_active.is_(True)).order_by(PackageConfig.tier_rank, PackageConfig.code)).all()
     return templates.TemplateResponse(request=request, name="admin/event_detail.html", context={
