@@ -16,7 +16,40 @@ logger = logging.getLogger(__name__)
 
 def _derivative_key(media: Media, filename: str) -> str:
     parent = media.object_key.rsplit("/", 1)[0]
-    return f"{parent}/derivatives/{filename}"
+    return f"{parent}/derivatives/{media.id}/{filename}"
+
+
+def _uses_legacy_derivative_keys(media: Media) -> bool:
+    """Return whether this row still points at the old event-shared derivatives.
+
+    Before v0.10.1 every image in an event used the same ``preview.webp`` key
+    (and every video shared the same processed/poster keys). The most recently
+    processed upload therefore replaced every earlier gallery preview.
+    """
+    parent = media.object_key.rsplit("/", 1)[0]
+    legacy_prefix = f"{parent}/derivatives/"
+    unique_prefix = f"{legacy_prefix}{media.id}/"
+    keys = (media.preview_object_key, media.poster_object_key, media.processed_object_key)
+    return any(key and key.startswith(legacy_prefix) and not key.startswith(unique_prefix) for key in keys)
+
+
+def requeue_legacy_derivatives() -> int:
+    """Rebuild media affected by the historical shared-derivative-key bug."""
+    with SessionLocal() as db:
+        media_items = db.scalars(
+            select(Media).where(
+                Media.status == "uploaded",
+                Media.processing_status == "ready",
+            )
+        ).all()
+        affected = [media for media in media_items if _uses_legacy_derivative_keys(media)]
+        for media in affected:
+            media.processing_status = "pending"
+            media.processing_error = None
+        if affected:
+            db.commit()
+            logger.warning("Queued %s media item(s) to repair shared gallery derivatives", len(affected))
+        return len(affected)
 
 
 def _run(command: list[str]) -> None:
