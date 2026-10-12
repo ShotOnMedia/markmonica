@@ -84,3 +84,16 @@ def test_memories_events_branding_is_shared_across_public_and_host_pages():
 
     assert Path("static/memories-events-logo.svg").exists()
     assert Path("static/brand.css").exists()
+
+
+def test_shared_login_has_accessible_password_visibility_control():
+    template = Path("templates/login.html").read_text()
+    script = Path("static/password-visibility.js").read_text()
+
+    assert 'id="login-password"' in template
+    assert 'data-password-visibility' in template
+    assert 'aria-controls="login-password"' in template
+    assert 'aria-label="Show password"' in template
+    assert '/static/password-visibility.js' in template
+    assert 'input.type = reveal ? "text" : "password"' in script
+    assert 'reveal ? "Hide password" : "Show password"' in script
