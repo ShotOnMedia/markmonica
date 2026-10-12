@@ -104,9 +104,12 @@ def event_for_owner(db,user,event_id):
     event=db.scalar(stmt)
     if event is None:raise HTTPException(404)
     return event
-def live_event_by_slug(db,slug):
+def event_by_slug(db,slug):
     event=db.scalar(select(Event).where(Event.slug==slug))
     if event is None:raise HTTPException(404)
+    return event
+def live_event_by_slug(db,slug):
+    event=event_by_slug(db,slug)
     if event.status!="live":raise HTTPException(403,"This event is not accepting uploads yet.")
     return event
 def guest_url(event):return f"{settings.app_url.rstrip('/')}/e/{event.slug}"
@@ -419,12 +422,14 @@ def host_cover(event_id:uuid.UUID,request:Request,db:Session=Depends(get_db)):
     return RedirectResponse(create_presigned_download(event.cover_object_key),302)
 @app.get("/e/{event_slug}/cover")
 def guest_cover(event_slug:str,db:Session=Depends(get_db)):
-    event=live_event_by_slug(db,event_slug);package=get_package(event.package_code,db=db)
-    if not package.custom_event_design or not event.cover_object_key:raise HTTPException(404)
+    event=event_by_slug(db,event_slug)
+    if not event.cover_object_key:raise HTTPException(404)
     return RedirectResponse(create_presigned_download(event.cover_object_key),302)
 @app.get("/e/{event_slug}",response_class=HTMLResponse)
 def guest_event(event_slug:str,request:Request,db:Session=Depends(get_db)):
-    event=live_event_by_slug(db,event_slug);package=get_package(event.package_code,db=db);guest_media=[];guest_gallery_enabled=bool(package.guest_gallery and event.guest_gallery_enabled)
+    event=event_by_slug(db,event_slug)
+    if event.status!="live":return templates.TemplateResponse(request=request,name="event_pending.html",context={"event":event})
+    package=get_package(event.package_code,db=db);guest_media=[];guest_gallery_enabled=bool(package.guest_gallery and event.guest_gallery_enabled)
     if guest_gallery_enabled:guest_media=db.scalars(select(Media).where(Media.event_id==event.id,Media.status=="uploaded",Media.processing_status=="ready").order_by(Media.created_at.desc())).all()
     global_video_bytes=settings.max_video_upload_mb*1024*1024;max_video_bytes=min(global_video_bytes,package.max_video_bytes) if package.max_video_bytes is not None else global_video_bytes
     return templates.TemplateResponse(request=request,name="guest_event.html",context={"event":event,"guest_media":guest_media,"guest_gallery_enabled":guest_gallery_enabled,"max_image_mb":settings.max_image_upload_mb,"max_video_mb":max_video_bytes//(1024*1024)})
