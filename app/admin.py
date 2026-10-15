@@ -2,6 +2,7 @@ from io import BytesIO
 from pathlib import Path
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from urllib.parse import urlparse
+import hashlib
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -12,8 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.branding import DEFAULTS as BRAND_DEFAULTS, FONT_MAP, valid_hex
 from app.db import get_db
-from app.models import AdminActivity, BrandingSettings, Event, Media, PackageConfig, PackageOrder, PaymentProviderConfig, User, utcnow
-from app.security import user_from_session_token
+from app.models import AdminActivity, BrandingSettings, Event, Media, PackageConfig, PackageOrder, PaymentProviderConfig, User, UserSession, utcnow
+from app.security import hash_password, user_from_session_token
 from app.services.credential_vault import encrypt_secret
 from app.services.storage import delete_objects, upload_fileobj
 from app.services.package_orders import lock_commercial_event, require_resolved_payments
@@ -143,7 +144,7 @@ def users(request: Request, q: str = "", db: Session = Depends(get_db)):
 
 
 @router.get("/users/{user_id}", response_class=HTMLResponse)
-def user_detail(user_id: uuid.UUID, request: Request, db: Session = Depends(get_db)):
+def user_detail(user_id: uuid.UUID, request: Request, password_changed: str = "", password_error: str = "", db: Session = Depends(get_db)):
     admin = require_admin(request, db)
     target = db.get(User, user_id)
     if target is None:
@@ -156,6 +157,7 @@ def user_detail(user_id: uuid.UUID, request: Request, db: Session = Depends(get_
     return templates.TemplateResponse(request=request, name="admin/user_detail.html", context={
         "admin": admin, "section": "users", "target": target, "events": events,
         "media_count": media_count, "storage_label": fmt_bytes(storage),
+        "password_changed": password_changed == "1", "password_error": password_error,
     })
 
 
@@ -171,6 +173,34 @@ def user_status(user_id: uuid.UUID, request: Request, is_active: str = Form(...)
     target.is_active = active
     db.commit()
     return RedirectResponse(f"/admin/users/{target.id}", status_code=303)
+
+
+@router.post("/users/{user_id}/password")
+def user_password(
+    user_id: uuid.UUID,
+    request: Request,
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    admin = require_admin(request, db)
+    require_same_origin(request)
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(404)
+    if new_password != confirm_password:
+        return RedirectResponse(f"/admin/users/{target.id}?password_error=mismatch", status_code=303)
+    if not 8 <= len(new_password) <= 256:
+        return RedirectResponse(f"/admin/users/{target.id}?password_error=length", status_code=303)
+
+    target.password_hash = hash_password(new_password)
+    current_token = request.cookies.get(SESSION_COOKIE) if target.id == admin.id else None
+    current_token_hash = hashlib.sha256(current_token.encode()).hexdigest() if current_token else None
+    for session in db.scalars(select(UserSession).where(UserSession.user_id == target.id)).all():
+        if session.token_hash != current_token_hash:
+            db.delete(session)
+    db.commit()
+    return RedirectResponse(f"/admin/users/{target.id}?password_changed=1", status_code=303)
 
 
 @router.get("/events", response_class=HTMLResponse)
