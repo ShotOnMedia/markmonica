@@ -49,3 +49,4 @@ def test_audit_middleware_maps_admin_mutations():
     assert _describe("/admin/events/00000000-0000-0000-0000-000000000001/status", db)[0] == "event_status_changed"
     assert _describe("/admin/events/00000000-0000-0000-0000-000000000001/package", db)[0] == "event_package_changed"
     assert _describe("/admin/users/00000000-0000-0000-0000-000000000001/status", db)[0] == "user_status_changed"
+    assert _describe("/admin/users/00000000-0000-0000-0000-000000000001/password", db)[0] == "user_password_changed"

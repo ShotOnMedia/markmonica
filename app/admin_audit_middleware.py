@@ -29,6 +29,13 @@ def _describe(path: str, db):
         label = target.email if target else parts[2]
         state = "enabled" if target and target.is_active else "disabled" if target else "changed"
         return "user_status_changed", "user", parts[2], label, f"Host account status was {state}."
+    if len(parts) >= 4 and parts[1] == "users" and parts[3] == "password":
+        try:
+            target = db.get(User, uuid.UUID(parts[2]))
+        except ValueError:
+            target = None
+        label = target.email if target else parts[2]
+        return "user_password_changed", "user", parts[2], label, "Account password was changed by an administrator."
     if len(parts) >= 4 and parts[1] == "events":
         try:
             event = db.get(Event, uuid.UUID(parts[2]))

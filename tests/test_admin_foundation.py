@@ -18,7 +18,7 @@ def test_admin_routes_are_registered():
     paths = {route.path for route in admin_router.routes if hasattr(route, "path")}
     for path in (
         "/admin", "/admin/", "/admin/users", "/admin/users/{user_id}",
-        "/admin/users/{user_id}/status", "/admin/events", "/admin/events/{event_id}",
+        "/admin/users/{user_id}/status", "/admin/users/{user_id}/password", "/admin/events", "/admin/events/{event_id}",
         "/admin/events/{event_id}/status", "/admin/events/{event_id}/package", "/admin/media",
         "/admin/packages", "/admin/packages/{code}", "/admin/branding",
     ):
@@ -80,6 +80,7 @@ def test_admin_mutation_routes_are_post_only():
         if hasattr(route, "methods"):
             route_methods.setdefault(route.path, set()).update(route.methods)
     assert route_methods["/admin/users/{user_id}/status"] == {"POST"}
+    assert route_methods["/admin/users/{user_id}/password"] == {"POST"}
     assert route_methods["/admin/events/{event_id}/status"] == {"POST"}
     assert route_methods["/admin/events/{event_id}/package"] == {"POST"}
     assert route_methods["/admin/packages/{code}"] == {"POST"}
